@@ -1,0 +1,3 @@
+# .gitignore: Keep personal agent preferences and macOS metadata out of project history.
+/AGENTS.local.md
+.DS_Store
