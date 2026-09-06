@@ -1,3 +1,34 @@
-# .gitignore: Keep personal agent preferences and macOS metadata out of project history.
-/AGENTS.local.md
+# .gitignore: Exclude personal settings, secrets, caches, and generated build output.
+
+# Personal project and agent preferences.
+AGENTS.local.md
+*.local.md
+local.md
+
+# Local credentials; keep shareable example configuration.
+.env
+.env.*
+!.env.example
+
+# Operating system and editor temporary files.
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Python environments and caches.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# JavaScript dependencies and generated build output.
+node_modules/
+/dist/
+/build/
+
+# Keep images, CAD sources/exports, and application PDFs tracked.
