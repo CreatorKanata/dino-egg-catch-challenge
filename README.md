@@ -1,5 +1,9 @@
 <!-- README.md: Project entry point for the concept and repository layout. -->
+![Dino Egg Catch Challenge](images/robot/dino-egg-catch-challenge-16-9.png)
+
 # Dino Egg Catch Challenge
+
+**We will be exhibiting Dino Egg Catch Challenge at Maker Faire Bay Area 2026!**
 
 A hands-on dinosaur robot experience using a LeKiwi mobile base and an SO-ARM101 arm. Visitors aim to catch egg capsules with the dinosaur's mouth. The current prize plan includes 100 KachiButton USB keyboard keychains and approximately 100 NFC-enabled dinosaur keychains.
 
