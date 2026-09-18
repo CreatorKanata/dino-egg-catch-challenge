@@ -1,13 +1,13 @@
 <!-- docs/dino-controller-validation.md: Define wiring checks, reproducible Arduino builds, and acceptance evidence without claiming physical tests. -->
 # Dino Controller Build and Validation Plan
 
-Draft — 2026-09-19. Companion to the [detailed specification](dino-controller.md). Joystick and encoder tests below are **planned, not executed**. Start with the [LED smoke test](../src/dino-controller/README.md); its build/upload results are recorded there separately.
+Draft — 2026-09-19. Companion to the [detailed specification](dino-controller.md). Stage 1 LED blinking was visually accepted. Stage 2 passed automated software tests, and the owner confirmed correct basic operation after GPIO remapping on 2026-09-19. Extended physical checks and Stage 3 encoder checks remain pending unless explicitly recorded. Current build/upload evidence is in the [sketch README](../src/dino-controller/README.md).
 
 ## Stage 1. Red LED smoke test
 
-Build and upload the current `src/dino-controller/dino-controller.ino`, then visually confirm red for one second and off for one second for at least five cycles. Proceed to joystick wiring only after this check. See the [sketch README](../src/dino-controller/README.md) for instructions and recorded results.
+The Stage 1 sketch at commit `120c321` blinked red for one second and off for one second. That visual check is complete; the current Stage 2 sketch uses direction colors instead. See the [sketch README](../src/dino-controller/README.md) for instructions and recorded results.
 
-Validation record (2026-09-19): Arduino compilation and upload passed, and the project owner confirmed correct red blinking on the connected board. Stage 1 is accepted. Joystick and encoder validation remain pending.
+Validation record (2026-09-19): Arduino compilation and upload passed, and the project owner confirmed correct red blinking on the connected board. Stage 1 is accepted. Later joystick validation is recorded below; encoder validation remains pending.
 
 ## Stage 2. Identify joystick wiring before power-on
 
@@ -22,13 +22,34 @@ Validation record (2026-09-19): Arduino compilation and upload passed, and the p
 | Player action | Conducting pair | Verified GPIO / result |
 | --- | --- | --- |
 | Neutral | None expected | Pending |
-| UP | Common ___ / wire ___ | Pending; proposed GPIO25 |
-| DOWN | Common ___ / wire ___ | Pending; proposed GPIO26 |
-| LEFT | Common ___ / wire ___ | Pending; proposed GPIO27 |
-| RIGHT | Common ___ / wire ___ | Pending; proposed GPIO21 |
+| UP | Common ___ / wire ___ | GPIO26, observed by owner; continuity record pending |
+| DOWN | Common ___ / wire ___ | GPIO27, observed by owner; continuity record pending |
+| LEFT | Common ___ / wire ___ | GPIO21, observed by owner; continuity record pending |
+| RIGHT | Common ___ / wire ___ | GPIO25, observed by owner; continuity record pending |
 | UP+RIGHT | Common / UP / RIGHT | Pending; verify restrictor permits it |
 
 The reference order GND / DOWN / UP / RIGHT / LEFT is a hypothesis only. Store the measured connector orientation and mapping with the eventual test record.
+
+Direction calibration (owner report, 2026-09-19): the initial firmware reported `down` for physical UP, `left` for physical DOWN, `right` for physical LEFT, and `up` for physical RIGHT. These observations establish the GPIO assignments above. Keep the wires in place and remap the logical directions in firmware. After the corrected firmware was uploaded, the owner reported that it worked correctly on 2026-09-19. This accepts the Stage 2 basic operation check; individual repetition counts, diagonal combinations, and latency measurements were not reported.
+
+### Stage 2 Serial Monitor and RGB check
+
+After the unpowered wiring checks, upload the Stage 2 sketch and open Serial Monitor at **115200 baud, 8N1**, with newline enabled. If startup output was missed, send `STATE`. On 2026-09-19, upload succeeded on `/dev/cu.usbserial-110`, and a bounded serial check received a valid all-false joystick snapshot in response to `STATE`. The checker then closed and released the port. This confirms the serial response, but not physical wiring, directions, or LED colors. Check these actions from the player's viewpoint:
+
+| Action | Serial state | RGB LED | Physical status |
+| --- | --- | --- | --- |
+| Neutral / release | All four fields false | Off | Pending |
+| UP | Only `up` true | Red | Included in owner acceptance of corrected basic operation |
+| DOWN | Only `down` true | Green | Included in owner acceptance of corrected basic operation |
+| RIGHT | Only `right` true | Blue | Included in owner acceptance of corrected basic operation |
+| LEFT | Only `left` true | White | Included in owner acceptance of corrected basic operation |
+| UP+RIGHT or UP+LEFT | Both relevant fields true | Red | Pending |
+| DOWN+RIGHT or DOWN+LEFT | Both relevant fields true | Green | Pending |
+| Hold one direction | No repeat records | Corresponding color stays on | Pending |
+
+A wrong direction/color requires checking the wire-to-GPIO mapping, not assuming the reference connector image is correct. Record the observed results before adding the encoder. The LED confirms the same debounced state sent over USB; it does not independently prove the common wire is correct.
+
+Automated check command: `python3 tests/dino_controller/run_tests.py`. The tests compile the actual sketch against fake GPIO, time, RGB, and UART interfaces with AddressSanitizer and UndefinedBehaviorSanitizer. They cover switch bounce, independent debounce, held startup, release, diagonals, opposing contacts, neutral/color priority, timer wraparound, `STATE` framing, bounded commands, partial writes, and overflow recovery. Hardware GPIO voltages and actual switch directions remain separate physical checks.
 
 ## Stage 3. Verify the rotary encoder
 
@@ -69,7 +90,7 @@ The CLI was not on the shell PATH, but the Arduino IDE bundled executable was av
 
 ### CLI equivalent after implementation
 
-Run from the repository root. These commands compile the sketch currently implemented, initially the Stage 1 LED check. They do not upload or establish joystick/encoder operation.
+Run from the repository root. These commands compile the current Stage 2 joystick diagnostic sketch. They do not upload or establish joystick/encoder operation.
 
 ```sh
 ARDUINO_CLI='/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli'
@@ -94,7 +115,7 @@ arduino-cli core install esp32:esp32@3.3.11 \
 
 Do not infer a serial port from a copied example. Enumerate ports with the board connected and verify the device. The Stage 1 connection and upload results are recorded in the sketch README. No joystick or encoder physical tests are implied by them.
 
-## 4. Hardware-independent tests to implement
+## 4. Hardware-independent acceptance coverage
 
 Tests must exercise the production logic with synthetic times and transitions, without requiring a board. Keep them outside the Arduino sketch directory.
 
@@ -114,7 +135,7 @@ Tests must exercise the production logic with synthetic times and transitions, w
 | Protocol framing and command bounds | Valid JSON, typed payloads, `STATE` LF/CRLF, bounded invalid input |
 | Counter/timer rollover | Correct debounce across `millis()` wrap; sequence wraps modulo 2^32 |
 
-Add debounce tests in Stage 2 and quadrature tests in Stage 3. The simple Stage 1 blink is checked by compiling and physically observing it. Do not substitute tests that merely check whether source strings exist.
+Debounce, color feedback, and diagnostic transport tests are implemented in Stage 2. Quadrature tests will be added in Stage 3. The Stage 1 blink was compiled, uploaded, and visually accepted. Do not substitute tests that merely check whether source strings exist.
 
 ## 5. Physical acceptance tests
 

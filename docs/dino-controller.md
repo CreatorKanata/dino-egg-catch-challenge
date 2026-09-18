@@ -1,7 +1,7 @@
 <!-- docs/dino-controller.md: Define a reviewable hardware and serial contract before Arduino firmware is implemented. -->
 # Dino Controller Specification
 
-Draft v0.1 — 2026-09-19. The current sketch implements Stage 1 (red LED blink) only; compilation, upload, and owner-confirmed visible blinking passed on 2026-09-19. Input behavior and the serial contract below are specifications for later stages, not implemented or physically verified features.
+Draft v0.1 — 2026-09-19. Stage 1 red blinking was compiled, uploaded, and visually confirmed by the owner on 2026-09-19. The current sketch implements Stage 2 joystick diagnostics with direction-dependent RGB feedback. Joystick GPIO assignments follow the owner's observed handle directions, and the owner confirmed correct operation after remapping on 2026-09-19. Stage 2 basic operation is accepted; extended physical checks remain separately recorded. Encoder handling and the final v1 protocol remain planned for Stage 3.
 
 ## 1. Scope and evidence
 
@@ -23,14 +23,22 @@ Implementation proceeds through the three stages below, with a physical check be
 | Stage | Implementation | Completion check |
 | --- | --- | --- |
 | 1. Red LED blink | `rgbLedWrite` drives the onboard WS2812 on GPIO16; red brightness 32/255, on for 1000 ms and off for 1000 ms | Compile, upload, then visually confirm at least five red/off cycles |
-| 2. Joystick | Identify common and four directions with an unpowered continuity test; confirm the GPIO map; add debounced directional state and USB serial messages | Confirm neutral, each direction, releases, held input, and supported diagonals in Serial Monitor |
+| 2. Joystick | Verify common and four directions; add debounced directional state, USB serial messages, and direction-dependent RGB feedback | Confirm neutral, each direction, release, hold, diagonals, and LED colors on the actual wiring |
 | 3. Rotary encoder | Confirm 3.3 V signals and SW wiring; calibrate rest phase, detents, and CW direction; add ordered rotation and switch events | Confirm per-detent counts, both directions, push/release, and simultaneous joystick operation |
 
-Complete and review each stage's physical result before enabling the next. The current Stage 1 sketch does not read the joystick or encoder. The final protocol includes both input devices, but Stage 2 must not report an unconnected encoder switch as a measured input: initially use `ready` and `joystick` reports plus an initial joystick report, and introduce the final combined `state` contract in Stage 3.
+Complete and review each stage's physical result before enabling the next. The current Stage 2 sketch reads the four joystick inputs; encoder pins are not configured or sampled. The final protocol includes both input devices, but Stage 2 must not report an unconnected encoder switch as a measured input: initially use `ready` and `joystick` reports plus an initial joystick report, and introduce the final combined `state` contract in Stage 3.
 
 During Stage 2, label the staged protocol as `v: 0` (experimental). On `STATE`, reply with the current four-direction `joystick` record, including at startup. Do not label this reduced interface as protocol v1. Stage 3 enables the complete v1 schema below once the encoder switch is connected and validated. Game integration should wait for the final v1 interface.
 
-The GPIO16 RGB LED and GPIO2 ordinary LED are distinct. Keep GPIO16 reserved while performing the LED check. Its blocking blink loop is temporary; remove it or use nonblocking scheduling before implementing input capture.
+### Stage 2 direction feedback and diagnostics
+
+The GPIO16 WS2812 now shows the accepted joystick state instead of blinking. Brightness is 32/255 for each active color channel. Neutral is off; UP is red; DOWN is green; RIGHT is blue; LEFT is white. **Vertical directions take priority on diagonals**, as selected by the owner: UP+LEFT/RIGHT is red, DOWN+LEFT/RIGHT is green. The full deterministic priority is UP, DOWN, RIGHT, LEFT. Opposing contacts are still reported faithfully over serial so wiring faults remain visible.
+
+`joystick.h` independently debounces each contact for 10 ms, scanning on a 1 ms schedule. The LED and serial report use the same accepted state. Startup waits for a stable baseline, then emits a v0 `ready` record (including the GPIO map) and one `joystick` snapshot. Holding or remaining neutral produces no repeated events. `STATE` with LF or CRLF requests a current `joystick` snapshot without resetting the board.
+
+`serial_protocol.h` uses a 64-event queue and bounded 256-byte output / 32-byte command buffers. UART writes use available capacity, so input scanning continues during partial transmission. If the queue overflows, finish the active line, discard uncertain queued history, then send a v0 `error` with `code: event_overflow` and the current `joystick` state. Invalid/overlong commands are ignored through their newline. Stage 2 reports no encoder button or rotation fields. The sketch uses no `delay` calls.
+
+The ordinary GPIO2 LED is separate from this RGB indicator. See the [sketch README](../src/dino-controller/README.md) for Serial Monitor examples and the physical direction/color checklist.
 
 ## 2. Hardware connection
 
@@ -42,9 +50,9 @@ Common ground ────┘
 
 Use the board USB connector for power and serial communication. Arduino `Serial` uses UART0 on this target. No additional USB–UART adapter or wiring to TX/RX is required. The classic ESP32-WROOM-32E does not provide native USB HID through this connector. [F1][E2][E4]
 
-### Proposed GPIO allocation
+### GPIO allocation
 
-Use the **GPIO number printed on the board**, not a physical header position. This is a proposed allocation; reconcile it with existing wiring before uploading firmware.
+Use the **GPIO number printed on the board**, not a physical header position. Joystick assignments below follow the owner's observations on the existing wiring (2026-09-19); encoder assignments remain proposed for Stage 3.
 
 | Device terminal / logical signal | ESP32 connection | Configuration |
 | --- | --- | --- |
@@ -54,10 +62,12 @@ Use the **GPIO number printed on the board**, not a physical header position. Th
 | Encoder `DT` / B | GPIO33 | `INPUT_PULLUP`, both-edge interrupt |
 | Encoder `SW` | GPIO23 | `INPUT_PULLUP`, active LOW |
 | Joystick common, after continuity verification | GND | Shared ground |
-| Joystick UP contact | GPIO25 | `INPUT_PULLUP`, active LOW |
-| Joystick DOWN contact | GPIO26 | `INPUT_PULLUP`, active LOW |
-| Joystick LEFT contact | GPIO27 | `INPUT_PULLUP`, active LOW |
-| Joystick RIGHT contact | GPIO21 | `INPUT_PULLUP`, active LOW |
+| Joystick UP contact | GPIO26 | `INPUT_PULLUP`, active LOW |
+| Joystick DOWN contact | GPIO27 | `INPUT_PULLUP`, active LOW |
+| Joystick LEFT contact | GPIO21 | `INPUT_PULLUP`, active LOW |
+| Joystick RIGHT contact | GPIO25 | `INPUT_PULLUP`, active LOW |
+
+The first diagnostic mapping reported DOWN for physical UP, LEFT for DOWN, RIGHT for LEFT, and UP for RIGHT. The owner's handle direction is authoritative: correct the GPIO names in `config.h` and retain the existing wiring. Serial fields and LED colors share this corrected map.
 
 Each joystick switch should connect its signal to common only while actuated. The intended passive joystick requires no VCC wire. Inactive inputs read HIGH; active contacts read LOW. In the protocol, `true` means active.
 
@@ -158,17 +168,19 @@ If the queue overflows, latch the fault. Finish any partially written line, inva
 
 ## 5. Firmware structure and configuration
 
-The current sketch and `config.h` implement the LED check. Additional input modules and tests are planned for Stages 2 and 3:
+The current Stage 2 files are listed below. Encoder-specific modules will be added in Stage 3:
 
 ```text
 src/dino-controller/
-  dino-controller.ino  # Arduino setup/loop and hardware integration
-  config.h             # Pins, timings, decoder mode, protocol/buffer constants
-  inputs.h / inputs.cpp
-  encoder.h / encoder.cpp
-  protocol.h / protocol.cpp
+  dino-controller.ino  # GPIO acquisition, RGB output, and serial integration
+  config.h             # GPIOs, timings, brightness, and buffer limits
+  joystick.h           # Hardware-independent switch debounce
+  joystick_led.h       # Direction colors and vertical priority
+  serial_protocol.h    # Bounded v0 diagnostics and STATE commands
 tests/dino_controller/
-  test_inputs.cpp      # Host-runnable logic tests, outside the Arduino sketch
+  test_joystick.cpp     # Production sketch tested with simulated hardware
+  fakes/Arduino.h      # GPIO, clock, RGB, and bounded UART simulation
+  run_tests.py         # Sanitized native build and JSON-stream assertions
 ```
 
 The sketch basename must match the `dino-controller` folder. Keep each authored file at or below 300 lines. Keep debounce, quadrature, and framing logic testable without ESP32 hardware. Use Arduino-ESP32 APIs and fixed-size storage initially; no encoder or JSON library is required. [A1]
@@ -181,9 +193,9 @@ A temporary diagnostic build should expose physical GPIO levels and captured A/B
 
 | Item | Required evidence before acceptance |
 | --- | --- |
-| Current GPIO wiring | Compare each actual wire with the proposed allocation |
+| Current GPIO wiring | Joystick directions observed by the owner; retain this map and verify the proposed encoder allocation |
 | Joystick common and order | Continuity table and connector photo with viewing orientation |
-| Directions | Test movement from the installed player's viewpoint |
+| Directions | Basic corrected operation accepted by the owner on 2026-09-19; detailed repetition and diagonal results remain unrecorded |
 | Encoder electrical behavior | Confirm 3.3 V supply, idle signal levels, SW closes to GND |
 | Encoder step calibration | Measure rest phase, transitions per detent, CW phase order, and total detents per turn |
 | Noise, debounce, maximum speed | Test with final cable lengths and enclosure |

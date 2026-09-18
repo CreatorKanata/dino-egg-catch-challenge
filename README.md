@@ -7,14 +7,14 @@
 
 A hands-on dinosaur robot experience using a LeKiwi mobile base and an SO-ARM101 arm. Visitors aim to catch egg capsules with the dinosaur's mouth. The current prize plan includes 100 KachiButton USB keyboard keychains and approximately 100 NFC-enabled dinosaur keychains.
 
-This repository contains planning documents, SO101 reference models, custom CAD prototypes, and a parametric magnetic tactile fingertip generator. The attendee controller currently has a red LED smoke-test sketch; joystick/encoder inputs and robot control remain planned; the fingertip exports have not been physically qualified.
+This repository contains planning documents, SO101 reference models, custom CAD prototypes, and a parametric magnetic tactile fingertip generator. The attendee controller has owner-confirmed joystick diagnostics with RGB direction feedback; extended joystick tests, encoder inputs, and robot control remain pending; the fingertip exports have not been physically qualified.
 
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
 | [src/robot/](src/robot/README.md) | SO-ARM101 and LeKiwi control, integration, and operating modes |
-| [src/dino-controller/](src/dino-controller/README.md) | ESP32 Arduino controller, starting with a red LED smoke test |
+| [src/dino-controller/](src/dino-controller/README.md) | ESP32 Arduino joystick diagnostics and RGB direction feedback |
 | [docs/dino-controller.md](docs/dino-controller.md) | Controller wiring, staged implementation, and serial protocol specification |
 | [src/tactile_fingertip/](src/tactile_fingertip/README.md) | Parametric magnetic fingertip CAD, STL export, and geometry checks |
 | [3d-models/](3d-models/README.md) | Reference CAD, custom parts, and fabrication exports |
