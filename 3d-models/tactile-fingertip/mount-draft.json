@@ -1,0 +1,33 @@
+{
+  "status": "Draft fit coupon; board holes and component clearances unmeasured",
+  "units": "mm",
+  "parameters": {
+    "board_width": 26.3,
+    "board_depth": 26.0,
+    "board_thickness": 1.6,
+    "width": 34.0,
+    "depth": 34.0,
+    "plate": 3.0,
+    "standoff": 3.0,
+    "boss_diameter": 6.0,
+    "hole_pitch": 20.0,
+    "hole_y": 10.0,
+    "screw_clearance": 3.2,
+    "head_diameter": 6.2,
+    "chip_active_offset": 0.5
+  },
+  "cad_valid": true,
+  "stl_watertight": true,
+  "assembly": "Translate mount by fingertip height in print coordinates",
+  "nominal_magnet_to_sensor_mm": 13.95,
+  "outline_evidence": "Owner-supplied annotated image: 26.3 x 26 mm",
+  "estimated_parameters": [
+    "hole_pitch",
+    "hole_y"
+  ],
+  "assumed_parameters": [
+    "board_thickness",
+    "chip_active_offset"
+  ],
+  "fastener": "Trial M3 90-degree flat-head screws, rear washers/nuts; verify actual dimensions"
+}

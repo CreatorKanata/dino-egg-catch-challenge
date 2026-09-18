@@ -1,0 +1,64 @@
+{
+  "design": "v3 crossed diamond ribs with two integral skins",
+  "units": "mm",
+  "coordinate_system": "contact face down at print Z=0; mounting skin at Z=height",
+  "parameters": {
+    "width": 20.0,
+    "depth": 20.0,
+    "height": 10.0,
+    "contact_skin": 0.8,
+    "mounting_skin": 0.8,
+    "pocket_wall": 0.8,
+    "pocket_roof": 0.8,
+    "magnet_diameter": 3.0,
+    "magnet_height": 1.5,
+    "diameter_compensation": 0.0,
+    "depth_compensation": 0.0,
+    "cell_pitch": 8.0,
+    "cell_count": 3,
+    "strut": 0.8,
+    "rib_depth": 1.2,
+    "rib_pitch": 4.0,
+    "rib_count": 5,
+    "tie_thickness": 0.8,
+    "tip_embed": 0.4,
+    "mount_land": 2.4,
+    "sensor_center_distance": 10.0,
+    "layer_height": 0.1,
+    "nozzle": 0.4,
+    "stl_tolerance": 0.01,
+    "angular_tolerance": 0.1,
+    "geometry_tolerance": 1e-06,
+    "mesh_volume_relative_tolerance": 0.002
+  },
+  "geometry": {
+    "cad_valid": true,
+    "cad_solids": 1,
+    "cad_surface_shells": 2,
+    "size_mm": [
+      20.0,
+      20.0,
+      10.0
+    ],
+    "cad_volume_mm3": 1115.9824612955135,
+    "pocket_volume_mm3": 10.602875205865551,
+    "pause_access": "passed",
+    "stl_watertight": true,
+    "stl_surface_shells": 2,
+    "surface_signed_volumes_mm3": [
+      -10.598481009466559,
+      1126.574247657762
+    ],
+    "triangles": 3052,
+    "stl_sha256": "bab0bc6ca647205c67b20e6a19c2b7321eac41556030a779d6f4f858062376b6"
+  },
+  "pause": {
+    "completed_print_z_mm": 2.3,
+    "completed_layers_with_uniform_first_layer": 23,
+    "first_roof_layer_top_z_mm": 2.4,
+    "instruction": "Pause BEFORE the first toolpath closing the pocket; confirm in slicer."
+  },
+  "magnet_center_print_z_mm": 1.55,
+  "sensor_active_plane_print_z_mm": 11.55,
+  "physical_validation": "Not printed or sensor-tested; exact CAD fit is not a measured interference fit."
+}
