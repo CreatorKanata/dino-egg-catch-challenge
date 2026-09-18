@@ -16,7 +16,7 @@ Before starting work, read `AGENTS.local.md` in this repository root if it exist
 This project develops the Dino Egg Catch Challenge: a LeKiwi mobile base, an SO-ARM101 dinosaur arm, attendee controls, and custom 3D parts.
 
 - `src/robot/`: robot integration, arm/base control, and operating modes.
-- `src/controller/`: attendee inputs, controller behavior, and control interfaces.
+- `src/dino-controller/`: attendee inputs, controller behavior, and control interfaces.
 - `3d-models/`: reference models, editable designs, and fabrication exports.
 - `docs/`: concept, design decisions, validation records, and Maker Faire materials.
 - Keep KachiButton implementation in its separate repository; document its prize integration here.
