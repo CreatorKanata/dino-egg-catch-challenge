@@ -1,75 +1,43 @@
-<!-- src/dino-controller/README.md: Explain Stage 2 joystick wiring, direction colors and USB diagnostics. -->
+<!-- src/dino-controller/README.md: Start development of the verified ESP32 joystick and rotary input controller. -->
 # Dino Controller
 
-The current Arduino sketch checks the **four-switch arcade joystick** using RGB direction feedback and USB serial reports. It debounces contacts, reports presses and releases, and preserves both directions on diagonals. Rotary encoder inputs are reserved for Stage 3 and are not read yet.
+Arduino firmware for the Freenove ESP32-WROOM-32E board, arcade joystick, and rotary encoder with shaft switch. The owner accepted basic joystick operation and corrected CW/CCW rotation on **2026-09-19**. The current USB serial protocol remains **v0**.
 
-## Wiring
+![Current controller wiring](../../images/dino-controller/controller-wiring.png)
 
-Disconnect USB before wiring. Identify the joystick common wire by continuity first; the supplied HAYABUSA connector picture is a reference for another product, not proof of this joystick's wire order.
+The HAYABUSA inset is an unverified connector reference. Joystick GPIO assignments describe actual player handle directions, not a presumed five-pin order.
 
-| Joystick contact | ESP32 GPIO / terminal | LED when active alone |
+| Input | ESP32 connection | Behavior |
 | --- | --- | --- |
-| Common | GND | — |
-| UP | 26 | Red |
-| DOWN | 27 | Green |
-| RIGHT | 25 | Blue |
-| LEFT | 21 | White |
-| Neutral | No contacts active | Off |
+| Joystick UP / DOWN | GPIO26 / GPIO27 | Red / green |
+| Joystick RIGHT / LEFT | GPIO25 / GPIO21 | Blue / white |
+| Joystick common | GND | Passive contacts; no VCC |
+| Encoder CLK / DT / SW | GPIO32 / GPIO33 / GPIO23 | Relative rotation / shaft press |
+| Encoder + / GND | 3V3 / GND | 3.3 V only |
 
-The direction-to-GPIO mapping follows the owner's handle-motion observations on 2026-09-19. Keep the existing wires in place; `config.h` corrects the logical names. The previous mapping reported DOWN for physical UP, LEFT for DOWN, RIGHT for LEFT, and UP for RIGHT.
+The onboard GPIO16 WS2812 is off at neutral. Vertical inputs take color priority on diagonals; serial preserves both directions. Joystick/SW scan every 1 ms with 10 ms debounce. Encoder decoding uses four edges per step, rest `ab=3`, and `kEncoderInvert=true`; CW reports +1 and CCW -1.
 
-The intended passive joystick has no VCC connection. Each contact uses `INPUT_PULLUP`; closing it to common GND reads LOW and becomes `true`. Directions are from the player's viewpoint. See the [wiring checks](../../docs/dino-controller-validation.md) and [Freenove pinout](../../images/dino-controller/Freenove-ESP32-Dev-Board.png).
+## Quick start
 
-The onboard WS2812 is on **GPIO16**, separate from the GPIO2 LED. Brightness is 32/255 per active channel. **Up/down take priority on diagonals:** UP+LEFT/RIGHT shows red; DOWN+LEFT/RIGHT shows green. Serial still reports both active directions. For contradictory contacts, deterministic LED priority is UP, DOWN, RIGHT, LEFT; serial preserves all bits for diagnosis.
+1. Check the [illustrated wiring](../../docs/dino-controller-wiring.md).
+2. Open `dino-controller.ino` in Arduino IDE. Select **ESP32 Dev Module**, **esp32 by Espressif Systems 3.3.11**, 4 MB flash, PSRAM Disabled, default partition, Core Debug Level None.
+3. Follow the [development guide](../../docs/dino-controller-development.md) to test, build, and upload. Close/disconnect serial monitors before uploading.
+4. Connect one terminal at **115200 baud, 8N1, no flow control**. Send uppercase `STATE` with LF or CRLF for a combined snapshot. Check joystick directions, knob rotation, and shaft press/release.
+5. Disconnect the terminal when finished so the USB serial port is available to others.
 
-The LED changes only after the same 10 ms debounce used by serial output. This replaces the previous blinking pattern; neutral now remains dark. GPIO scanning runs on a 1 ms schedule without `delay` calls.
-
-## Check in Arduino Serial Monitor
-
-1. Open `dino-controller.ino`, select **ESP32 Dev Module** (`esp32:esp32:esp32`) with the **esp32 by Espressif Systems 3.3.11** core, 4 MB flash and PSRAM Disabled.
-2. Verify/upload, then select the connected USB serial port and open Serial Monitor at **115200 baud**.
-3. At startup, a `ready` record shows the pin map, followed by the initial joystick state. A held contact is included in that initial state.
-4. Move each direction, release it, and try supported diagonals. The corresponding fields become `true`; release restores `false`. Check the LED colors against the table above.
-5. Holding the stick produces no repeated records. If output was missed, send **`STATE`** with newline (LF or CRLF) to request the current state.
-
-Illustrative UP, then neutral reports:
-
-```json
-{"v":0,"type":"joystick","seq":2,"ms":500,"up":true,"down":false,"left":false,"right":false}
-{"v":0,"type":"joystick","seq":3,"ms":900,"up":false,"down":false,"left":false,"right":false}
-```
-
-This is the experimental Stage 2 protocol (`v: 0`), not the future combined controller v1. A fixed 64-event queue allows input scanning while serial data drains. If it overflows, an `event_overflow` error is followed by a fresh joystick snapshot. Ignore ROM boot text before the JSON messages.
-
-If directions are swapped, disconnect USB and correct the verified wire mapping or the pin constants in `config.h`. If everything remains false, check common GND and each contact's continuity. Avoid inferring correct wiring merely from a neutral all-false report: disconnected inputs also read inactive.
-
-## Build and software tests
-
-Run from the repository root:
+No additional Arduino libraries are needed. Run native tests from the repository root:
 
 ```sh
 python3 tests/dino_controller/run_tests.py
-ARDUINO_CLI='/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli'
-"$ARDUINO_CLI" compile \
-  --fqbn esp32:esp32:esp32 \
-  --board-options FlashSize=4M,PSRAM=disabled,PartitionScheme=default,DebugLevel=none \
-  --warnings all --build-path "$PWD/build/dino-controller" \
-  src/dino-controller
 ```
 
-The host tests need Python 3 and a C++17 compiler with AddressSanitizer/UndefinedBehaviorSanitizer support (Clang on this development Mac). They require no extra Arduino or Python packages. They execute the real sketch with simulated GPIO, time, RGB, and partial UART writes, then validate the emitted JSON.
+## Documentation
 
-## Validation record
+- [Current implementation and configuration](../../docs/dino-controller.md)
+- [Illustrated wiring and original pinout](../../docs/dino-controller-wiring.md)
+- [IDE/CLI build, upload, CoolTerm, and troubleshooting](../../docs/dino-controller-development.md)
+- [Complete JSON v0 message protocol and STATE command](../../docs/dino-controller-protocol.md)
+- [Encoder calibration and decoding](../../docs/dino-controller-encoder.md)
+- [Accepted stages, test evidence, and remaining measurements](../../docs/dino-controller-validation.md)
 
-- **Stage 1:** commit `120c321` contains the red 1-second on/off smoke test; the owner confirmed visible blinking on 2026-09-19.
-- **Stage 2 software, 2026-09-19:** four host test cases passed, including native debounce, command/queue, color-priority, and sketch integration assertions under sanitizers. Arduino CLI 1.5.1 / ESP32 core 3.3.11 compilation passed: 289,325 / 1,310,720 bytes flash (22%); 23,940 / 327,680 bytes static RAM (7%).
-- **Stage 2 hardware, 2026-09-19:** upload to `/dev/cu.usbserial-110` passed with flash hashes verified and reset completed. A bounded 115200 baud, 8N1 serial check sent `STATE` and received a valid v0 joystick snapshot with all four inputs false (`seq: 2`, `ms: 148432`); the check closed and released the port immediately afterward. That serial-only check did not establish physical direction or color behavior; the later owner confirmation is recorded below.
-- **Direction calibration, 2026-09-19:** the owner identified UP on GPIO26, DOWN on GPIO27, LEFT on GPIO21, and RIGHT on GPIO25. Firmware and regression tests now use these observations. All four host test cases and the new physical-GPIO mapping assertions passed; Arduino compilation and upload passed again with the same flash/RAM usage. A bounded `STATE` check received an all-false v0 snapshot (`seq: 2`, `ms: 17961`) and released the port. The owner subsequently confirmed that the corrected joystick worked correctly on 2026-09-19. Stage 2 basic operation is accepted; detailed cycle-count, diagonal, and latency measurements were not reported.
-- **Stage 3:** rotary encoder implementation and calibration are pending.
-
-## Detailed specifications
-
-- [Controller stages, GPIO allocation, debounce, and planned v1 protocol](../../docs/dino-controller.md)
-- [Continuity checks and physical acceptance tests](../../docs/dino-controller-validation.md)
-
-References: [Freenove setup](https://docs.freenove.com/projects/fnk0090/en/latest/fnk0090/codes/C/Preface.html), [Espressif GPIO API](https://docs.espressif.com/projects/arduino-esp32/en/latest/api/gpio.html), [Espressif Serial API](https://docs.espressif.com/projects/arduino-esp32/en/latest/api/serial.html).
+Stage 1 red blinking is preserved in commit `120c321`; Stage 2 joystick/RGB in `89cdaac`. The current Stage 3 adds encoder/SW and combined snapshots. Eight native test cases and the last Arduino build/upload passed. Exact tactile-click counts, maximum speed, and latency have not been measured; see the validation record.

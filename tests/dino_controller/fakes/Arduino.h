@@ -10,6 +10,19 @@ constexpr int LOW = 0;
 constexpr int HIGH = 1;
 constexpr int INPUT_PULLUP = 2;
 constexpr int SERIAL_8N1 = 3;
+constexpr int CHANGE = 4;
+#define ARDUINO_ISR_ATTR
+struct portMUX_TYPE { unsigned depth = 0; };
+#define portMUX_INITIALIZER_UNLOCKED {}
+inline void portENTER_CRITICAL(portMUX_TYPE* mux) { assert(mux->depth++ == 0); }
+inline void portEXIT_CRITICAL(portMUX_TYPE* mux) { assert(--mux->depth == 0); }
+inline void portENTER_CRITICAL_ISR(portMUX_TYPE* mux) { portENTER_CRITICAL(mux); }
+inline void portEXIT_CRITICAL_ISR(portMUX_TYPE* mux) { portEXIT_CRITICAL(mux); }
+inline void (*fakeInterrupts[40])(){};
+inline void attachInterrupt(uint8_t pin, void (*handler)(), int mode) {
+  assert(mode == CHANGE);
+  fakeInterrupts[pin] = handler;
+}
 inline uint32_t fakeMillis = 0;
 inline int fakePins[40]{};
 inline int fakeModes[40]{};

@@ -1,165 +1,96 @@
-<!-- docs/dino-controller-validation.md: Define wiring checks, reproducible Arduino builds, and acceptance evidence without claiming physical tests. -->
-# Dino Controller Build and Validation Plan
+<!-- docs/dino-controller-validation.md: Separate accepted hardware behavior, software evidence, and unmeasured physical checks. -->
+# Controller Validation Record
 
-Draft — 2026-09-19. Companion to the [detailed specification](dino-controller.md). Stage 1 LED blinking was visually accepted. Stage 2 passed automated software tests, and the owner confirmed correct basic operation after GPIO remapping on 2026-09-19. Extended physical checks and Stage 3 encoder checks remain pending unless explicitly recorded. Current build/upload evidence is in the [sketch README](../src/dino-controller/README.md).
+Updated **2026-09-19** after owner acceptance of the corrected encoder direction. Basic operation of all three stages is accepted. This does not imply measured detent counts, maximum speed, or latency. Build/upload instructions are maintained in the [development guide](dino-controller-development.md), with actual messages in the [v0 protocol reference](dino-controller-protocol.md).
 
-## Stage 1. Red LED smoke test
+## Completed implementation stages
 
-The Stage 1 sketch at commit `120c321` blinked red for one second and off for one second. That visual check is complete; the current Stage 2 sketch uses direction colors instead. See the [sketch README](../src/dino-controller/README.md) for instructions and recorded results.
-
-Validation record (2026-09-19): Arduino compilation and upload passed, and the project owner confirmed correct red blinking on the connected board. Stage 1 is accepted. Later joystick validation is recorded below; encoder validation remains pending.
-
-## Stage 2. Identify joystick wiring before power-on
-
-1. Disconnect USB power and disconnect the joystick harness from the ESP32. Use a multimeter in continuity mode on the unpowered joystick alone.
-2. Photograph the connector, latch, viewing side, and installed player-facing orientation. Assign temporary labels P1–P5 in the photograph; do not borrow numbering from the HAYABUSA image.
-3. With the stick neutral, verify its normally-open directional contacts do not conduct.
-4. Move UP from the player's viewpoint. Find the pair of harness wires that becomes continuous. Repeat for DOWN, LEFT, and RIGHT.
-5. Identify the one wire shared by all four directional pairs: the candidate common/GND. Each other wire should close only for its respective direction. If no consistent common exists, stop assuming a passive common-ground joystick and inspect the actual switch terminals.
-6. Test diagonals if supported by the restrictor: common should connect to two adjacent directions together. Confirm release returns to open contacts. Mechanical switch placement under the stick can be opposite to the direction of handle movement.
-7. Record results, then connect the verified common and four contacts to the proposed GPIOs or revise the configuration to match existing wiring. Keep all five joystick wires away from the supply rails except the verified common-to-GND connection.
-
-| Player action | Conducting pair | Verified GPIO / result |
-| --- | --- | --- |
-| Neutral | None expected | Pending |
-| UP | Common ___ / wire ___ | GPIO26, observed by owner; continuity record pending |
-| DOWN | Common ___ / wire ___ | GPIO27, observed by owner; continuity record pending |
-| LEFT | Common ___ / wire ___ | GPIO21, observed by owner; continuity record pending |
-| RIGHT | Common ___ / wire ___ | GPIO25, observed by owner; continuity record pending |
-| UP+RIGHT | Common / UP / RIGHT | Pending; verify restrictor permits it |
-
-The reference order GND / DOWN / UP / RIGHT / LEFT is a hypothesis only. Store the measured connector orientation and mapping with the eventual test record.
-
-Direction calibration (owner report, 2026-09-19): the initial firmware reported `down` for physical UP, `left` for physical DOWN, `right` for physical LEFT, and `up` for physical RIGHT. These observations establish the GPIO assignments above. Keep the wires in place and remap the logical directions in firmware. After the corrected firmware was uploaded, the owner reported that it worked correctly on 2026-09-19. This accepts the Stage 2 basic operation check; individual repetition counts, diagonal combinations, and latency measurements were not reported.
-
-### Stage 2 Serial Monitor and RGB check
-
-After the unpowered wiring checks, upload the Stage 2 sketch and open Serial Monitor at **115200 baud, 8N1**, with newline enabled. If startup output was missed, send `STATE`. On 2026-09-19, upload succeeded on `/dev/cu.usbserial-110`, and a bounded serial check received a valid all-false joystick snapshot in response to `STATE`. The checker then closed and released the port. This confirms the serial response, but not physical wiring, directions, or LED colors. Check these actions from the player's viewpoint:
-
-| Action | Serial state | RGB LED | Physical status |
-| --- | --- | --- | --- |
-| Neutral / release | All four fields false | Off | Pending |
-| UP | Only `up` true | Red | Included in owner acceptance of corrected basic operation |
-| DOWN | Only `down` true | Green | Included in owner acceptance of corrected basic operation |
-| RIGHT | Only `right` true | Blue | Included in owner acceptance of corrected basic operation |
-| LEFT | Only `left` true | White | Included in owner acceptance of corrected basic operation |
-| UP+RIGHT or UP+LEFT | Both relevant fields true | Red | Pending |
-| DOWN+RIGHT or DOWN+LEFT | Both relevant fields true | Green | Pending |
-| Hold one direction | No repeat records | Corresponding color stays on | Pending |
-
-A wrong direction/color requires checking the wire-to-GPIO mapping, not assuming the reference connector image is correct. Record the observed results before adding the encoder. The LED confirms the same debounced state sent over USB; it does not independently prove the common wire is correct.
-
-Automated check command: `python3 tests/dino_controller/run_tests.py`. The tests compile the actual sketch against fake GPIO, time, RGB, and UART interfaces with AddressSanitizer and UndefinedBehaviorSanitizer. They cover switch bounce, independent debounce, held startup, release, diagonals, opposing contacts, neutral/color priority, timer wraparound, `STATE` framing, bounded commands, partial writes, and overflow recovery. Hardware GPIO voltages and actual switch directions remain separate physical checks.
-
-## Stage 3. Verify the rotary encoder
-
-1. With power disconnected, verify terminal labels and check SW-to-GND continuity when pressed. Inspect whether onboard resistors pull signal pins toward `+`.
-2. Power only the encoder supply from 3V3/GND initially; keep its signal wires disconnected from ESP32 inputs while checking that CLK/DT/SW voltages stay within the ESP32 input range.
-3. Connect CLK→GPIO32, DT→GPIO33, and SW→GPIO23 after that check. Confirm released/pressed SW polarity.
-4. Use the planned diagnostic build or a logic analyzer to observe slow clockwise and counterclockwise motion. Count physical detents per revolution, electrical transitions per detent, and A/B rest states.
-5. Choose full-step or half-step decoding and the rest phase from measurements. Flip the sign configuration if physical CW reports CCW; do not compensate in the PC application.
-6. Save a short trace for each direction and for bounce/reversal. Include these measured patterns in later decoder tests.
-
-For a synthetic example only, A=CLK and B=DT may traverse `11 → 10 → 00 → 01 → 11`; reverse traversal must yield the opposite sign. Which traversal is physical CW remains unverified.
-
-## 3. Arduino build target
-
-| Setting | Initial proposal |
+| Stage | Implementation / physical evidence |
 | --- | --- |
-| Framework | Arduino-ESP32, Espressif Systems |
-| Board | ESP32 Dev Module |
-| FQBN | `esp32:esp32:esp32` |
-| Flash / PSRAM | 4 MB / Disabled, subject to actual module confirmation |
-| CPU | Board default, initially 240 MHz |
-| Partition | Default 4 MB scheme |
-| Core Debug Level | None; keep diagnostic output separate from protocol frames |
-| Additional libraries | None |
+| 1. Red LED | GPIO16 WS2812, brightness 32/255, one second red / one second off. Build/upload passed and owner confirmed blinking. Commit `120c321`. The current firmware replaces blinking with direction feedback |
+| 2. Joystick | Owner identified actual UP=26, DOWN=27, LEFT=21, RIGHT=25. Firmware names were corrected while retaining wires. Owner confirmed correct basic operation after upload. Commit `89cdaac` |
+| 3. Encoder | Owner connected CLK32, DT33, SW23, 3V3/GND and confirmed operation, initially reporting CW/CCW reversed. `kEncoderInvert=true` corrected polarity. After rebuild/upload, owner confirmed correct operation |
 
-Observed development environment on 2026-09-19: Arduino IDE **2.3.10**, its bundled Arduino CLI **1.5.1**, and installed ESP32 core **3.3.11**. The local `boards.txt` defines `esp32.name=ESP32 Dev Module`. CLI `version` and `compile --help` were checked. These observations do not establish physical input validation.
+Initial joystick reports were DOWN for actual UP, LEFT for DOWN, RIGHT for LEFT, and UP for RIGHT. The current map is based on actual handle direction, not the supplied HAYABUSA connector reference. See the [illustrated wiring](dino-controller-wiring.md).
 
-The CLI was not on the shell PATH, but the Arduino IDE bundled executable was available. Initial builds should use and record the installed 3.3.11 baseline; change versions only with a recorded reason and rerun acceptance tests.
+Stage 2 used joystick-only v0 snapshots. Stage 3 uses combined v0 `state` records. Hardware acceptance has not promoted the version to v1.
 
-### Arduino IDE procedure after implementation
+## Recorded software, build, and upload evidence
 
-1. Open `src/dino-controller/dino-controller.ino`.
-2. In Boards Manager, select the installed **esp32 by Espressif Systems 3.3.11** package.
-3. Select **ESP32 Dev Module** and the settings above, adjusting flash/PSRAM only after identifying the real module.
-4. Run **Verify** to compile. Record the complete build result and flash/RAM usage.
-5. For a physical test, choose the verified device port and run **Upload**. In Stage 1, visually check the red/off blink; the sketch emits no serial messages.
-6. In Stages 2 and 3, open Serial Monitor at **115200 baud** with newline for `STATE`. Stage 2 uses experimental joystick-only reports; Stage 3 uses the complete v1 protocol. Close Serial Monitor before another application opens the same port.
+| Check | Recorded result on 2026-09-19 |
+| --- | --- |
+| Stage 2 native tests | Four host cases passed, including calibrated GPIO direction and LED assertions |
+| Stage 2 compile | 289,325 / 1,310,720 bytes flash; 23,940 / 327,680 bytes static RAM |
+| Stage 3 native tests after polarity correction | Eight cases passed under AddressSanitizer and UndefinedBehaviorSanitizer, including the configured CW/CCW regression |
+| Stage 3 compile | CLI 1.5.1, ESP32 core 3.3.11, `esp32:esp32:esp32`, 4 MB flash, PSRAM disabled; 292,949 / 1,310,720 bytes flash (22%), 25,492 / 327,680 bytes static RAM (7%) |
+| Stage 3 upload | `/dev/cu.usbserial-110`, flash hashes verified, board reset completed |
+| Serial check after polarity correction | Bounded 115200 / 8N1 session sent `STATE`, received the combined response below, then closed the port |
+| Owner follow-up | Accepted operation after the CW/CCW correction |
 
-### CLI equivalent after implementation
+Captured response from the post-correction serial check:
 
-Run from the repository root. These commands compile the current Stage 2 joystick diagnostic sketch. They do not upload or establish joystick/encoder operation.
-
-```sh
-ARDUINO_CLI='/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli'
-"$ARDUINO_CLI" core list
-"$ARDUINO_CLI" board details --fqbn esp32:esp32:esp32
-"$ARDUINO_CLI" compile \
-  --fqbn esp32:esp32:esp32 \
-  --board-options FlashSize=4M,PSRAM=disabled,PartitionScheme=default,DebugLevel=none \
-  --warnings all \
-  --build-path "$PWD/build/dino-controller" \
-  src/dino-controller
+```json
+{"v":0,"type":"state","seq":2,"ms":23342,"device":"dino-controller","up":false,"down":false,"left":false,"right":false,"button":false,"ab":3}
 ```
 
-On a clean machine, install Arduino CLI first, then install the pinned core using the official package index:
+This capture verifies the combined response and sampled inactive levels, not mechanical direction or exact step counts. The later owner confirmation provides basic physical acceptance. CoolTerm was disconnected for the upload; the checking script closed its handle afterward. Port ownership must be checked anew for future sessions.
 
-```sh
-arduino-cli core update-index \
-  --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
-arduino-cli core install esp32:esp32@3.3.11 \
-  --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
-```
+## Hardware-independent coverage
 
-Do not infer a serial port from a copied example. Enumerate ports with the board connected and verify the device. The Stage 1 connection and upload results are recorded in the sketch README. No joystick or encoder physical tests are implied by them.
+Run `python3 tests/dino_controller/run_tests.py` from the repository root. Tests compile production logic and the actual sketch with simulated GPIO/time/RGB/UART/interrupts; they do not establish real electrical timing or contact quality.
 
-## 4. Hardware-independent acceptance coverage
-
-Tests must exercise the production logic with synthetic times and transitions, without requiring a board. Keep them outside the Arduino sketch directory.
-
-| Test | Expected result |
+| Area | Coverage |
 | --- | --- |
-| Stable press/release and contact bounce | One event after each accepted 10 ms stable interval; no duplicates |
-| Two joystick inputs changing in one scan | One full-state message containing both changes |
-| Diagonal contacts closing at different times | Correct intermediate and final states; both contacts can remain active |
-| Held and opposing inputs | No auto-repeat; all physical accepted bits retained |
-| Complete forward/reverse quadrature cycles | One event per calibrated detent, correct opposite signs |
-| CW then CCW before the main loop drains | Two ordered events, never a net-zero disappearance |
-| Partial reversal, bounce, invalid jump | No phantom completed step; resynchronization after invalid input |
-| Startup at an arbitrary phase | No rotation until a subsequent qualified detent completes |
-| Full-step and half-step calibration | Correct counts for each measured rest-state pattern |
-| Queue overflow and partial TX write | Complete JSON frames, explicit error, then fresh state; no silent loss |
-| Snapshot while input changes | Snapshot/event ordering never restores an older held state |
-| Protocol framing and command bounds | Valid JSON, typed payloads, `STATE` LF/CRLF, bounded invalid input |
-| Counter/timer rollover | Correct debounce across `millis()` wrap; sequence wraps modulo 2^32 |
+| Joystick | Independent 10 ms debounce, bounce, release, held startup, diagonals, opposing contacts, actual GPIO mapping, timer rollover |
+| LED | Neutral off, four colors, vertical priority, shared accepted state |
+| Decoder | 1,000 forward/reverse synthetic cycles; duplicate/bouncing edges, incomplete reversal, invalid jumps, arbitrary startup phase |
+| Calibration | Four/two-edge modes, inversion, alternate rest phase, current configured CW/+1 and CCW/-1 |
+| SW | Bounce, press/release, held startup, timer rollover |
+| Integration | Both rotation signs captured before loop drain, simultaneous joystick operation, simulated interrupts |
+| Protocol | JSON payloads, LF/CRLF `STATE`, invalid/bounded commands, partial writes, message and edge overflow recovery |
 
-Debounce, color feedback, and diagnostic transport tests are implemented in Stage 2. Quadrature tests will be added in Stage 3. The Stage 1 blink was compiled, uploaded, and visually accepted. Do not substitute tests that merely check whether source strings exist.
+## Joystick continuity worksheet
 
-## 5. Physical acceptance tests
+This is still a documentation gap for the physical harness, even though functional GPIO mapping works.
 
-Operate only the input controller and serial receiver for this milestone; robot movement is not part of these tests.
+1. Disconnect USB and the joystick harness from the board. Test only the unpowered joystick.
+2. Photograph the connector, latch, viewing side, and installed player orientation. Assign P1–P5 in that photo.
+3. Find which pair becomes continuous for each actual handle direction. The shared wire is common; neutral should open all directional contacts.
+4. Check supported diagonals and release. If no common wire is shared by all four directions, inspect the switches before assuming this connector layout.
+5. Record wire IDs below. Never infer them from the unrelated HAYABUSA image or harness colors alone.
 
-| Test | Proposed pass criterion | Status |
+| Handle movement | Common / directional wire ID | Current verified GPIO |
 | --- | --- | --- |
-| Power-on neutral | `ready` then all-false `state`; no phantom input | Not run |
-| Power-on held input | Snapshot accurately reports held contacts; no fabricated rotation | Not run |
-| Four joystick directions | 20 press/release cycles per direction with correct states and no duplicates | Not run |
-| Supported diagonals | 10 cycles per supported diagonal, both contacts visible and released correctly | Not run |
-| Encoder switch | 20 press/release cycles; one event per accepted transition | Not run |
-| Encoder slow rotation | 20 detents CW and 20 CCW; exactly 20 matching events each | Not run |
-| Encoder fast rotation | Controlled 20 detents/second for 5 seconds each direction: 100 matching events, no loss | Not run |
-| Reversal and concurrent input | Ordered CW/CCW events retained while joystick and SW are operated | Not run |
-| Idle | No input events for 60 seconds after stabilization, excluding requested state replies | Not run |
-| Reconnect without board reset | `STATE` recovers a held direction even when the press happened before the port opened | Not run |
-| Reset / port auto-reset | Boot text tolerated; new session obtains a current state | Not run |
-| Disconnect | PC-side receiver clears held inputs and requires synchronization on reopen | Not run |
-| Queue fault injection | Error reported, no malformed frames, recovery snapshot restores current levels | Not run |
-| Input latency | Proposed target: ≤30 ms from stable physical transition/detent completion to a complete PC frame under normal load | Not run |
+| UP | ___ / ___ | 26 |
+| DOWN | ___ / ___ | 27 |
+| LEFT | ___ / ___ | 21 |
+| RIGHT | ___ / ___ | 25 |
+| Neutral | All open: ___ | No active input |
+| Supported diagonal | Common + two wires: ___ | Both corresponding inputs |
 
-Measure rate/count and latency with a repeatable fixture or signal capture when making a quantitative claim; hand spinning alone is exploratory. `ms` reports device time, so compare against a shared physical trace or synchronized measurement rather than subtracting unrelated PC and ESP32 clocks.
+## Extended physical checks still to record
 
-## 6. Evidence to record
+The following counts and thresholds are **proposed test criteria**, not reported measurements. Operate only the input controller/serial receiver for these checks; robot movement is outside this milestone.
 
-Record firmware revision, IDE/CLI/core versions, FQBN and board options, GPIO mapping, encoder calibration, cable length, configuration values, build log, test results, connector photos, and representative serial captures. Separate simulated tests, compilation, successful upload, and measured physical results. An untested item remains pending.
+| Check | Proposed criterion / evidence | Status |
+| --- | --- | --- |
+| Neutral/held startup | `ready` then correct combined `state`, no fabricated press/rotation | Dedicated record pending |
+| Four directions | 20 press/release cycles each, correct fields/colors, no duplicates | Basic accepted; counted run pending |
+| Diagonals | 10 cycles per supported diagonal; both fields, vertical color priority | Dedicated record pending |
+| Shaft button | 20 press/release cycles, one event per transition | Basic operation accepted; counted run pending |
+| Slow rotation | 20 tactile clicks each direction; compare event count and resting phases | Direction accepted; exact count pending |
+| Detent calibration | Rest phase at consecutive clicks, edges per click, detents per revolution | Pending |
+| Fast rotation | Controlled 20 clicks/second for 5 seconds each direction, compare 100 events | Proposed target; not measured |
+| Concurrent inputs/reversal | Preserve separate CW/CCW while joystick and SW change | Simulated; dedicated physical record pending |
+| Idle | No unsolicited input records over 60 seconds | Dedicated record pending |
+| Reconnect/reset | Recover held state through `STATE`; tolerate boot text and new session | Combined response captured; full scenarios pending |
+| Disconnect handling | Future PC receiver clears held inputs and resynchronizes on reopen | Host implementation pending |
+| Queue recovery | Explicit error, complete lines, fresh snapshot under injected load | Simulated; hardware stress test pending |
+| Latency | Proposed ≤30 ms stable input/step completion to complete PC frame | Not measured |
+| Final wiring | Supply levels, cable noise, installed enclosure, connector photo | Detailed electrical record pending |
+
+Measure rate/count and latency with a repeatable fixture or signal capture before making quantitative claims. Device `ms` is not synchronized to the PC clock. Electrical steps are not automatically proven identical to tactile clicks.
+
+## What to save for future changes
+
+Record source revision, IDE/CLI/core versions, FQBN/options, GPIO and calibration values, cable/enclosure setup, build result, test results, connector photos, and complete serial captures. Distinguish simulation, compilation, upload, basic owner acceptance, and measured results. Record serial disconnection at session end.
