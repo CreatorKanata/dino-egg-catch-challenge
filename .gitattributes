@@ -1,0 +1,3 @@
+# .gitattributes: Preserve Illustrator and PDF artwork as binary files.
+images/**/*.ai binary
+images/**/*.pdf binary

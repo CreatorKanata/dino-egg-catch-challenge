@@ -32,3 +32,7 @@ node_modules/
 /build/
 
 # Keep images, CAD sources/exports, and application PDFs tracked.
+
+# Large tablecloth artwork stays local pending explicit size approval.
+/images/makerfaire/tablecloth/tablecloth_maekake_1800_1570.ai
+/images/makerfaire/tablecloth/tablecloth.psd
