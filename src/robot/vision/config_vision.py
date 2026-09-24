@@ -92,7 +92,7 @@ EGG_MIN_SPOT_FRACTION: Final = 0.12
 # Egg bbox height / median core spot diameter: 3.1-4.3 for the green egg (and the dropped blue one), 2.46-2.86 for the
 # red egg (the edge stage finds only its two big spots); 1.8 keeps margin below the red egg.
 EGG_SCALE_RANGE: Final = (1.8, 6.5)
-EGG_MIN_SOLIDITY: Final = 0.85  # contour area / convex hull area: an egg outline is convex
+EGG_MIN_SOLIDITY: Final = 0.80  # contour area / convex hull area: an egg outline is convex. Real eggs measure 0.95-0.98; a shadowed red egg (capture 20260925-003436) hit 0.85, so the floor is 0.80 (glints are already removed by the spot windows)
 # Contour area / fitted-ellipse area; only for eggs clear of the frame border (a partly visible
 # egg is a truncated ellipse, still convex, so it keeps only the solidity test).
 EGG_ELLIPSE_FILL_RANGE: Final = (0.75, 1.25)

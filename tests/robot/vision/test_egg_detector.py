@@ -148,7 +148,7 @@ class DetectEggsTests(unittest.TestCase):
         frame = draw_egg(background(), (320, 230), (130, 100), "green")
         for dx in (-70, 0, 70):  # dark notches, like tarp reflections cutting the white
             cv2.line(frame, (320 + dx, 265), (320 + int(dx * 1.2), 345), BROWN, 32)
-        without = inspect_candidates(frame, DetectorParams(repair_kernel_fraction=0.0))[0]
+        without = inspect_candidates(frame, DetectorParams(repair_kernel_fraction=0.0, min_solidity=0.85))[0]  # notch: 0.80 < solidity < 0.85
         self.assertEqual(without.rejected, "solidity")
         self.assertEqual([det.color for det in detect_eggs(frame)], ["green"])
 
