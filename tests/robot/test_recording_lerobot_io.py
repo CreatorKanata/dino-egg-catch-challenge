@@ -19,6 +19,7 @@ from unittest import mock
 from robot.recording import lerobot_io, record_pick_egg
 from robot.recording.record_pick_egg import parse_args
 from robot.recording.session import SessionPlan, plan_from_args
+from robot.recording.speech import Speaker
 
 from recording_fakes import CATCH, FakeDataset, FakeRobot
 
@@ -39,16 +40,32 @@ def fake_lerobot(**modules):
     return mock.patch.dict(sys.modules, entries)
 
 
+class FakeSpeaker:
+    def __init__(self, spoken, idle=True):
+        self.spoken, self.idle = spoken, idle
+
+    def say(self, text):
+        self.spoken.append(text)
+
+    def say_replaceable(self, text):
+        self.spoken.append(("gate", text))
+
+    def wait_idle(self, timeout_s):
+        self.spoken.append(("wait", timeout_s))
+        return self.idle
+
+
 class SessionIOTests(unittest.TestCase):
-    def make_io(self, calls, spoken):
+    def make_io(self, calls, spoken, idle=True):
         record_loop = mock.Mock(side_effect=lambda **kwargs: calls.append(kwargs))
         with fake_lerobot(**{"lerobot.processor": {"make_default_processors": lambda: ("t", "r", "o")},
-                             "lerobot.scripts": {}, "lerobot.scripts.lerobot_record": {"record_loop": record_loop},
-                             "lerobot.utils": {}, "lerobot.utils.utils": {"log_say": lambda text, play_sounds: spoken.append(text)}}):
+                             "lerobot.scripts": {}, "lerobot.scripts.lerobot_record": {"record_loop": record_loop}}):
             robot, dataset = FakeRobot(), FakeDataset([], pending=True)
             events = {"exit_early": False, "rerecord_episode": False, "stop_recording": False}
-            leader = mock.Mock(get_action=lambda: {key.removeprefix("arm_"): value for key, value in CATCH.items()})
-            session_io = lerobot_io.make_session_io(PLAN, robot, leader, "keyboard", events, dataset, CATCH, display=True)
+            pose = {key.removeprefix("arm_"): value for key, value in CATCH.items()}
+            leader = mock.Mock(get_action=lambda: pose)
+            session_io = lerobot_io.make_session_io(PLAN, robot, leader, "keyboard", events, dataset, CATCH,
+                                                    display=True, speaker=FakeSpeaker(spoken, idle))
         return session_io, robot, leader, dataset
 
     def test_record_and_reset_call_record_loop_like_the_fork_example(self):
@@ -72,12 +89,23 @@ class SessionIOTests(unittest.TestCase):
         session_io, robot, _, dataset = self.make_io(calls, spoken)
         self.assertEqual(session_io.gate(), "ready")  # the robot and leader already sit at the catch pose
         session_io.say("hello")
-        self.assertEqual(spoken, ["hello"])
+        session_io.wait_quiet()
+        self.assertEqual(spoken, ["hello", ("wait", 3.0)])
         session_io.save_episode()
         session_io.discard_episode()
         self.assertEqual(dataset.log, ["save", "clear"])
         session_io.zero_base()
         self.assertEqual(robot.sent[-1]["x.vel"], 0.0)
+
+
+    def test_gate_guidance_is_replaceable_and_a_busy_speaker_is_logged(self):
+        spoken = []
+        with mock.patch.object(lerobot_io, "run_gate", side_effect=lambda *args: args[5]("hint") or "timeout"):
+            session_io, _, _, _ = self.make_io([], spoken, idle=False)
+            self.assertEqual(session_io.gate(), "timeout")
+        self.assertEqual(spoken, [("gate", "hint")])
+        with self.assertLogs("robot.recording.lerobot_io", "INFO"):
+            session_io.wait_quiet()
 
 
 class DatasetAndDeviceTests(unittest.TestCase):
@@ -150,7 +178,7 @@ class RecordTests(unittest.TestCase):
                 redirect_stdout(io.StringIO()) as out:
             run_session.return_value = mock.Mock(recorded=0, skipped=0, rerecorded=0, stopped=False, index=60,
                                                  durations_s=())
-            self.assertEqual(record_pick_egg.record(args, plan_from_args(args)), 0)
+            self.assertEqual(record_pick_egg.record(args, plan_from_args(args), Speaker(None)), 0)
             shutdown_args = lerobot_io.shutdown.call_args.args
         self.assertEqual([c.args[0] for c in order.call_args_list], ["leader.connect", "keyboard.connect", "robot.connect"])
         self.assertEqual(shutdown_args, (*devices, "listener", "dataset", True, False))
@@ -165,7 +193,7 @@ class RecordTests(unittest.TestCase):
                                  shutdown=mock.Mock(return_value=False)), \
                 mock.patch.object(record_pick_egg, "load_pose", return_value=dict(CATCH)), \
                 redirect_stdout(io.StringIO()) as out, self.assertLogs("robot.recording.record_pick_egg", "WARNING"):
-            self.assertEqual(record_pick_egg.record(args, plan_from_args(args)), 0)
+            self.assertEqual(record_pick_egg.record(args, plan_from_args(args), Speaker(None)), 0)
             lerobot_io.shutdown.assert_called_once()
         self.assertIn("Session stopped early", out.getvalue())
 

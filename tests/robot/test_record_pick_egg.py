@@ -35,6 +35,7 @@ class ParseTests(unittest.TestCase):
         args = parse_args(["--egg-color", "green"])
         self.assertEqual((args.remote_ip, args.leader_port, args.root), (PI_REMOTE_IP, LEADER_ARM_PORT, None))
         self.assertFalse(args.no_push or args.resume or args.no_rerun)
+        self.assertEqual(args.voice, "auto")
 
     def test_flags(self):
         args = parse_args(["--egg-color", "orange", "--resume", "--root", "/d", "--no-rerun", "--remote-ip", "1.2.3.4",
@@ -65,7 +66,7 @@ class IsolationTests(unittest.TestCase):
     def test_recorder_imports_are_stdlib_only(self):
         result = run_isolated("import sys, robot.recording.record_pick_egg, robot.recording.lerobot_io\n"
                               "import robot.recording.session, robot.recording.episode_gate, robot.recording.gate_runner\n"
-                              "import robot.recording.episode_loop, robot.recording.config_recording\n"
+                              "import robot.recording.episode_loop, robot.recording.config_recording, robot.recording.speech\n"
                               "names = ('lerobot', 'pygame', 'cv2', 'numpy', 'datasets', 'av')\n"
                               "loaded = [m for m in names if m in sys.modules]\n"
                               "assert not loaded, loaded\n")
@@ -81,17 +82,18 @@ class StartupTests(unittest.TestCase):
 
     def test_missing_catch_pose_refuses(self):
         with mock.patch.object(record_pick_egg, "load_pose", side_effect=FileNotFoundError("nope")):
-            code, out, logs = self.run_main(["--egg-color", "green"])
+            code, out, logs = self.run_main(["--egg-color", "green", "--voice", "none"])
         self.assertEqual(code, 2)
         self.assertIn("Close the Manual Mode application", out)
         self.assertIn("Right arrow", out)
+        self.assertIn("Voice: none (speech off", out)
         self.assertIn("Catch pose missing", logs)
 
     def test_existing_dataset_without_resume_refuses(self):
         with tempfile.TemporaryDirectory() as root, \
                 mock.patch.object(record_pick_egg, "load_pose", return_value=dict(CATCH)), \
                 mock.patch.object(lerobot_io, "lerobot_home", return_value=Path("/unused")):
-            code, _, logs = self.run_main(["--egg-color", "green", "--root", root])
+            code, _, logs = self.run_main(["--egg-color", "green", "--root", root, "--voice", "none"])
         self.assertEqual(code, 2)
         self.assertIn("--resume", logs)
 

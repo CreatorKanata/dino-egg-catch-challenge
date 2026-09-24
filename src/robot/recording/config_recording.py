@@ -29,6 +29,12 @@ GATE_SPEED_DEG_S: Final = ARM_ENGAGE_SPEED_DEG_S  # follower approach to the cat
 IMAGE_WRITER_THREADS: Final = 4  # as in the fork's examples/lekiwi/record.py
 RERUN_SESSION_NAME: Final = "dino_pick_egg_record"
 
+# --- Speech (owner trial run, 2026-09-25: the Mac's default voice was Japanese and garbled English) ---
+RECORDER_VOICE: Final = "auto"  # "auto", "none" (speech off, text still logged), or a `say -v` voice name
+RECORDER_VOICE_PREFERENCE: Final = ("Samantha", "Ava", "Allison", "Alex", "Karen", "Daniel", "Moira")
+SPEECH_IDLE_WAIT_S: Final = 3.0  # before an episode, wait at most this long for queued speech to finish
+SPEECH_CLOSE_WAIT_S: Final = 10.0  # at exit, let the last announcements play for at most this long
+
 # Verified against the fork (utils/keyboard_input.py init_keyboard_listener and the LeKiwi client
 # teleop_keys in robots/lekiwi/config_lekiwi.py) on 2026-09-25.
 KEY_MAP: Final = (

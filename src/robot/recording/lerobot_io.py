@@ -16,10 +16,11 @@ from typing import Any
 
 from robot.config import LEADER_ARM_ID, ROBOT_ID
 from robot.leader_arm import LeaderArm
-from robot.recording.config_recording import IMAGE_WRITER_THREADS, RERUN_SESSION_NAME
+from robot.recording.config_recording import IMAGE_WRITER_THREADS, RERUN_SESSION_NAME, SPEECH_IDLE_WAIT_S
 from robot.recording.episode_loop import SessionIO
 from robot.recording.gate_runner import run_gate, zero_base
 from robot.recording.session import SessionPlan
+from robot.recording.speech import Speaker
 
 logger = logging.getLogger(__name__)
 
@@ -70,22 +71,16 @@ def start_input(display: bool) -> tuple[Any, MutableMapping[str, bool]]:
     return listener, events
 
 
-def speaker() -> Callable[[str], None]:
-    from lerobot.utils.utils import log_say
-
-    return lambda text: log_say(text, play_sounds=True)
-
-
 def make_session_io(plan: SessionPlan, robot: Any, leader: Any, keyboard: Any, events: MutableMapping[str, bool],
-                    dataset: Any, catch_pose: Mapping[str, float], display: bool) -> SessionIO:
-    """Wrap the fork's record_loop and dataset calls for episode_loop.run_session."""
+                    dataset: Any, catch_pose: Mapping[str, float], display: bool, speaker: Speaker) -> SessionIO:
+    """Wrap the fork's record_loop and dataset calls for episode_loop.run_session. The fork's
+    record_loop has no play_sounds parameter and does not speak; every announcement goes to `speaker`."""
     import time
 
     from lerobot.processor import make_default_processors
     from lerobot.scripts.lerobot_record import record_loop
 
     teleop_proc, robot_proc, obs_proc = make_default_processors()
-    say = speaker()
     gate_leader = LeaderArm(teleop_factory=lambda _port, _id: leader)  # read_pose(): arm_ keys or None
 
     def phase(with_dataset: bool, seconds: float) -> None:
@@ -96,15 +91,21 @@ def make_session_io(plan: SessionPlan, robot: Any, leader: Any, keyboard: Any, e
 
     return SessionIO(
         events=events,
-        gate=lambda: run_gate(robot, gate_leader.read_pose, catch_pose, events, plan.fps, say),
+        gate=lambda: run_gate(robot, gate_leader.read_pose, catch_pose, events, plan.fps, speaker.say_replaceable),
         record_episode=lambda: phase(True, plan.episode_time_s),
         reset=lambda: phase(False, plan.reset_time_s),
         save_episode=lambda: _save(dataset),
         discard_episode=dataset.clear_episode_buffer,
         zero_base=lambda: zero_base(robot),
-        say=say,
+        say=speaker.say,
         now=time.monotonic,
+        wait_quiet=lambda: _wait_quiet(speaker),
     )
+
+
+def _wait_quiet(speaker: Speaker) -> None:
+    if not speaker.wait_idle(SPEECH_IDLE_WAIT_S):
+        logger.info("Speech still playing after %.0f s; recording anyway", SPEECH_IDLE_WAIT_S)
 
 
 def _save(dataset: Any) -> None:

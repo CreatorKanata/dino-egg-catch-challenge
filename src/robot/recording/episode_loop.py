@@ -44,6 +44,7 @@ class SessionIO:
     zero_base: Callable[[], None]
     say: Callable[[str], None]
     now: Callable[[], float]
+    wait_quiet: Callable[[], None] = lambda: None  # let the announcement finish before recording
 
 
 def _clear_flags(events: MutableMapping[str, bool]) -> None:
@@ -68,6 +69,7 @@ def _one_attempt(plan: SessionPlan, state: SessionState, io: SessionIO) -> Sessi
         return after_skipped(state)
     _clear_flags(io.events)
     io.say(recording_message(plan, state))
+    io.wait_quiet()
     started = io.now()
     io.record_episode()
     duration = io.now() - started

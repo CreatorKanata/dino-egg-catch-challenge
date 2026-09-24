@@ -113,6 +113,12 @@ class EpisodeLoopTests(unittest.TestCase):
         with self.assertLogs("robot.recording.episode_loop", "ERROR"):
             self.assertEqual(run_session(PLAN, io).recorded, 2)
 
+    def test_waits_for_quiet_speech_between_the_announcement_and_recording(self):
+        harness = Harness()
+        io = SessionIO(**{**harness.io().__dict__, "wait_quiet": lambda: harness.log.append("quiet")})
+        run_session(SessionPlan(**{**PLAN.__dict__, "num_episodes": 1}), io)
+        self.assertEqual(harness.log, ["gate", "quiet", "record", "zero", "save"])
+
     def test_stop_already_set_ends_at_once(self):
         harness = Harness()
         harness.events["stop_recording"] = True

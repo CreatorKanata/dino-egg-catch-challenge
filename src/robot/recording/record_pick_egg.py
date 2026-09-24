@@ -24,8 +24,11 @@ from robot.recording.config_recording import (
     DEFAULT_TASK,
     EGG_COLORS,
     KEY_MAP,
+    RECORDER_VOICE,
+    SPEECH_CLOSE_WAIT_S,
 )
 from robot.recording.session import SessionPlan, SessionState, plan_from_args, resolve_root, start_error, summary_lines
+from robot.recording.speech import Speaker, make_player, resolve_voice
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--leader-port", default=LEADER_ARM_PORT,
                         help=f"leader arm serial port (default {LEADER_ARM_PORT})")
     parser.add_argument("--no-rerun", action="store_true", help="do not open the Rerun viewer")
+    parser.add_argument("--voice", default=RECORDER_VOICE,
+                        help=f"macOS `say` voice, 'auto' (first installed English preference), or 'none' "
+                             f"(default {RECORDER_VOICE})")
     return parser
 
 
@@ -61,7 +67,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return build_parser().parse_args(argv)
 
 
-def record(args: argparse.Namespace, plan: SessionPlan) -> int:
+def record(args: argparse.Namespace, plan: SessionPlan, speaker: Speaker) -> int:
     """Connect, record, and always shut down; return the exit code."""
     from robot.recording import lerobot_io as io
     from robot.recording.episode_loop import run_session
@@ -90,13 +96,15 @@ def record(args: argparse.Namespace, plan: SessionPlan) -> int:
         listener, events = io.start_input(display)
         display_started = display
         state = run_session(plan, io.make_session_io(plan, robot, leader, keyboard, events, dataset,
-                                                     catch_pose, display))
+                                                     catch_pose, display, speaker))
     except KeyboardInterrupt:
         logger.warning("Ctrl+C during start-up; shutting down")
         state = SessionState(stopped=True)
     finally:
+        speaker.say("Stop recording")
         pushed = io.shutdown(robot, leader, keyboard, listener, dataset, plan.push, display_started)
         print("\n".join(summary_lines(plan, state, root, pushed)))
+        speaker.say(f"Session finished, {state.recorded} episodes recorded")
     return 0
 
 
@@ -111,8 +119,15 @@ def main(argv: list[str] | None = None) -> int:
     print(STARTUP_NOTE)
     print(f"Robot: {args.remote_ip}  Leader arm: {args.leader_port}  Dataset: {plan.repo_id}  "
           f"Task: '{plan.single_task}'  Push: {'yes' if plan.push else 'no (--no-push)'}")
+    voice = resolve_voice(args.voice)
+    logger.info("Speech voice: %s", voice.label)
     print("\n".join(KEY_MAP))
-    return record(args, plan)
+    print(f"Voice: {voice.label} (--voice)")
+    speaker = Speaker(make_player(voice))
+    try:
+        return record(args, plan, speaker)
+    finally:
+        speaker.close(SPEECH_CLOSE_WAIT_S)
 
 
 if __name__ == "__main__":
