@@ -3,9 +3,12 @@
 Owner decision (docs/spec/operating-modes.md, section 3): when Manual Mode starts or after a stop,
 the dinosaur arm moves toward the leader's pose at a limited rate per key, and follows the
 leader directly only once every key is within tolerance. This removes the jump a mismatched
-leader would cause. approach_pose and within are shared with Auto Release (home pose and
-recorded-motion playback use the same rate-limited approach). Pure and stdlib-only; the caller
-passes the frame time.
+leader would cause. approach_pose (per key, for the moving leader target and the capped
+recorded-motion playback) and within are shared with Auto Release. approach_pose_sync moves to a
+fixed pose along the straight line in joint space so every key arrives together (every scripted
+pose move in Auto Catch and Auto Release): with per-key limits a small shoulder delta finished long
+before a large wrist delta and the head first rose, then tilted down (robot run 2026-09-25). Pure
+and stdlib-only; the caller passes the frame time.
 """
 
 from collections.abc import Iterable, Mapping
@@ -46,6 +49,27 @@ def approach_pose(
     `speed * dt` (dt clamped to [0, 2 / LOOP_HZ]), without overshooting."""
     max_step = speed * min(max(dt, 0.0), MAX_FRAME_DT_S)
     return {key: _approach(float(current[key]), float(target[key]), max_step) for key in keys}
+
+
+def approach_pose_sync(
+    current: Mapping[str, float],
+    target: Mapping[str, float],
+    dt: float,
+    speed: float = ARM_ENGAGE_SPEED_DEG_S,
+    keys: Iterable[str] = ARM_KEYS,
+) -> dict[str, float]:
+    """A new pose (all ARM_KEYS) with the `keys` moved together along the straight line from `current`
+    to `target`: the key with the largest delta D moves by at most `speed * dt` (dt clamped to
+    [0, 2 / LOOP_HZ]), every other key by the same fraction of its own delta, so all arrive in the
+    same frame. D == 0 returns the target. Keys not in `keys` (a held gripper) keep their value."""
+    moving = tuple(keys)
+    deltas = {key: float(target[key]) - float(current[key]) for key in moving}
+    largest = max((abs(delta) for delta in deltas.values()), default=0.0)
+    step = speed * min(max(dt, 0.0), MAX_FRAME_DT_S)
+    fraction = 1.0 if largest == 0.0 else min(1.0, step / largest)
+    moved = {key: float(target[key]) if fraction == 1.0 else float(current[key]) + delta * fraction
+             for key, delta in deltas.items()}
+    return {key: moved.get(key, float(current[key])) for key in ARM_KEYS}
 
 
 def within(

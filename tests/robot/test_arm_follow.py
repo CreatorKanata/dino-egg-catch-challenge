@@ -2,12 +2,13 @@
 
 follow_step is pure, so holding on a missing leader, the speed-limited approach, engagement
 within tolerance, real-time following, the dt clamp, and the gripper key are verified directly,
-as are the shared approach_pose / within helpers used by Auto Release.
+as are the shared approach_pose / within helpers used by Auto Release and the synchronized
+approach_pose_sync used for every scripted pose move (all keys arrive in the same frame).
 """
 
 import unittest
 
-from robot.arm_follow import ArmFollowState, approach_pose, disengaged, follow_step, within
+from robot.arm_follow import ArmFollowState, approach_pose, approach_pose_sync, disengaged, follow_step, within
 from robot.config import ARM_KEYS, LOOP_HZ
 
 HOLD = {key: 0.0 for key in ARM_KEYS}
@@ -84,6 +85,39 @@ class ApproachHelperTests(unittest.TestCase):
         self.assertTrue(within(HOLD, {key: 3.0 for key in ARM_KEYS}, 3.0))
         self.assertFalse(within(HOLD, {**HOLD, "arm_gripper.pos": 3.1}, 3.0))
         self.assertTrue(within(HOLD, {**HOLD, "arm_gripper.pos": 50.0}, 3.0, keys=ARM_KEYS[:5]))
+
+
+
+class ApproachSyncTests(unittest.TestCase):
+    TARGET = {**HOLD, "arm_wrist_flex.pos": 90.0, "arm_shoulder_lift.pos": 9.0}
+
+    def test_small_delta_moves_the_same_fraction_as_the_large_one(self):
+        moved = approach_pose_sync(HOLD, self.TARGET, 0.05, SPEED)
+        wrist, shoulder = moved["arm_wrist_flex.pos"], moved["arm_shoulder_lift.pos"]
+        self.assertAlmostEqual(wrist, SPEED * 0.05)  # the largest delta moves at the full speed
+        self.assertAlmostEqual(shoulder, wrist / 10)  # 9 deg of 90: exactly a tenth of the step
+        self.assertEqual(set(moved), set(ARM_KEYS))
+
+    def test_all_keys_arrive_in_the_same_frame(self):
+        pose, arrivals = dict(HOLD), {}
+        for frame in range(1, 400):
+            pose = approach_pose_sync(pose, self.TARGET, 1 / LOOP_HZ, SPEED)
+            for key in ("arm_wrist_flex.pos", "arm_shoulder_lift.pos"):
+                if key not in arrivals and pose[key] == self.TARGET[key]:
+                    arrivals[key] = frame
+            if len(arrivals) == 2:
+                break
+        self.assertEqual(arrivals["arm_wrist_flex.pos"], arrivals["arm_shoulder_lift.pos"])
+        self.assertEqual(arrivals["arm_wrist_flex.pos"], 90)  # 90 deg at 30 deg/s and 30 Hz: 90 frames
+        self.assertEqual(pose, self.TARGET)  # the last frame lands exactly
+
+    def test_zero_delta_dt_clamp_and_excluded_keys(self):
+        self.assertEqual(approach_pose_sync(HOLD, HOLD, 0.1, SPEED), HOLD)
+        clamped = approach_pose_sync(HOLD, self.TARGET, 5.0, SPEED)
+        self.assertAlmostEqual(clamped["arm_wrist_flex.pos"], SPEED * 2 / LOOP_HZ)
+        held = approach_pose_sync({**HOLD, "arm_gripper.pos": 7.0}, {**self.TARGET, "arm_gripper.pos": 50.0}, 0.05,
+                                  SPEED, ARM_KEYS[:5])
+        self.assertEqual(held["arm_gripper.pos"], 7.0)  # a held gripper keeps its value
 
 
 if __name__ == "__main__":

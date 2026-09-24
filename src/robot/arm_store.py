@@ -121,10 +121,13 @@ def wants_release(app: AppState, commands: Iterable[str]) -> bool:
     return "thx" in commands and manual_control_allowed(app)
 
 
-def load_catch_request(paths: ArmDataPaths, size: SizeClass) -> CatchRequest:
-    """The Hi! check's inputs: egg size class, catch pose, and release pose (home); None if missing."""
+def load_catch_request(
+    paths: ArmDataPaths, size: SizeClass, arm: Mapping[str, float] | None = None
+) -> CatchRequest:
+    """The Hi! check's inputs: egg size class, catch pose, and release pose (home; None if missing),
+    and the arm pose commanded now."""
     return CatchRequest(size=size, catch=_load(load_pose, paths.catch, "catch pose"),
-                        home=_load(load_pose, paths.home, "home pose"))
+                        home=_load(load_pose, paths.home, "home pose"), arm=None if arm is None else dict(arm))
 
 
 def wants_catch(app: AppState, commands: Iterable[str]) -> bool:

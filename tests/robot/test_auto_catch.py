@@ -1,7 +1,9 @@
 """tests/robot/test_auto_catch.py: Hardware-free checks of the Auto Catch state machine (Phase 3 step 1).
 
-auto_catch.py is pure, so the phase sequence align -> to_catch -> wrist_check -> pick_stub ->
-to_release with fake egg and wrist detections and a fake clock, the gripper following the catch
+auto_catch.py is pure, so the start rule (an arm off the release pose first moves there in
+`to_start`; near it, or with CATCH_VIA_RELEASE_POSE off, the alignment starts at once), the phase
+sequence align -> to_catch -> wrist_check -> pick_stub -> to_release with fake egg and wrist
+detections and a fake clock, all joints arriving together in the scripted moves, the gripper following the catch
 pose in `to_catch` and held in `to_release`, the per-frame rate limit, the zero base outside
 `align`, the wrist check (disabled, enabled with and without an egg), and every terminal outcome
 (lost, alignment timeout, pose timeouts, done, and the failure outcomes that repeat their warning
@@ -44,7 +46,7 @@ class Runner:
 
     def __init__(self, limits=LIMITS, commanded=START, now=100.0):
         self.now, self.commanded, self.limits = now, dict(commanded), limits
-        self.state = start_catch(now, CATCH, HOME)
+        self.state = start_catch(now, CATCH, HOME, commanded, limits)
         self.log = []
 
     def step(self, egg=ON_TARGET, wrist=None, dt=FRAME):
@@ -63,6 +65,40 @@ class Runner:
 
     def outcomes(self):
         return [result.outcome for result in self.log if result.outcome != "running"]
+
+
+OFF_POSE = {**START, "arm_wrist_flex.pos": 60.0, "arm_shoulder_lift.pos": -6.0}  # head low: 60 deg off
+
+
+class StartPoseTests(unittest.TestCase):
+    def test_far_start_inserts_the_move_to_the_release_pose(self):
+        self.assertEqual(start_catch(0.0, CATCH, HOME, OFF_POSE).phase, "to_start")
+        self.assertEqual(start_catch(0.0, CATCH, HOME, None).phase, "to_start")  # unknown pose: the safe path
+
+    def test_near_start_or_flag_off_skips_it(self):
+        near = {**START, "arm_wrist_flex.pos": 14.0, GRIPPER_KEY: 90.0}  # within 15 deg; the gripper is ignored
+        self.assertEqual(start_catch(0.0, CATCH, HOME, near).phase, "align")
+        off = replace(LIMITS, via_release_pose=False)
+        self.assertEqual(start_catch(0.0, CATCH, HOME, OFF_POSE, off).phase, "align")
+
+    def test_to_start_moves_together_with_the_gripper_held_then_aligns(self):
+        runner = Runner(commanded=OFF_POSE)
+        first = runner.step(FAR_RIGHT)
+        self.assertEqual((first.state.phase, first.base, first.align_result), ("to_start", zero_base(), None))
+        self.assertAlmostEqual(first.arm["arm_wrist_flex.pos"], 60.0 - 30.0 * FRAME)
+        self.assertAlmostEqual(first.arm["arm_shoulder_lift.pos"], -6.0 + 3.0 * FRAME)  # a tenth: arrive together
+        self.assertEqual(first.arm[GRIPPER_KEY], OFF_POSE[GRIPPER_KEY])
+        runner.run_until("align")
+        self.assertTrue(all(abs(runner.commanded[key] - HOME[key]) <= 3.0 for key in ARM_KEYS if key != GRIPPER_KEY))
+        self.assertEqual(runner.state.align.started_at, runner.now)  # the alignment clock starts here
+        self.assertTrue(all(result.base == zero_base() for result in runner.log))
+
+    def test_to_start_timeout_ends_the_action(self):
+        far = {**START, "arm_elbow_flex.pos": 179.0}
+        state = replace(start_catch(0.0, CATCH, HOME, far), started_at=0.0, updated_at=0.0)
+        result = catch_step(state, ON_TARGET, None, far, LIMITS.pose_timeout_s + 0.01, LIMITS)
+        self.assertEqual((result.outcome, result.state, result.arm, result.base),
+                         ("start_timeout", CatchState(), far, zero_base()))
 
 
 class AlignPhaseTests(unittest.TestCase):
@@ -86,7 +122,7 @@ class AlignPhaseTests(unittest.TestCase):
         for _ in range(ALIGN_LOST_FRAMES):
             result = runner.step(None)
         self.assertEqual((result.outcome, result.state, result.base, result.arm), ("lost", CatchState(), zero_base(), START))
-        late = catch_step(start_catch(0.0, CATCH, HOME), FAR_RIGHT, None, START, ALIGN_TIMEOUT_S + 0.1, LIMITS)
+        late = catch_step(start_catch(0.0, CATCH, HOME, START), FAR_RIGHT, None, START, ALIGN_TIMEOUT_S + 0.1, LIMITS)
         self.assertEqual((late.outcome, late.base), ("align_timeout", zero_base()))
 
 
@@ -145,7 +181,7 @@ class ArmPhaseTests(unittest.TestCase):
 
 class TimeoutTests(unittest.TestCase):
     def phase_state(self, phase):
-        return replace(start_catch(0.0, CATCH, HOME), phase=phase, started_at=0.0, updated_at=0.0)
+        return replace(start_catch(0.0, CATCH, HOME, START), phase=phase, started_at=0.0, updated_at=0.0)
 
     def test_catch_pose_timeout_warns_and_returns_to_the_release_pose(self):
         far = {**START, "arm_elbow_flex.pos": 179.0}
@@ -178,7 +214,8 @@ class TimeoutTests(unittest.TestCase):
         self.assertIsNot(result.arm, START)
 
     def test_phase_names(self):
-        self.assertEqual(CATCH_PHASES, ("idle", "align", "to_catch", "wrist_check", "pick_stub", "to_release"))
+        self.assertEqual(CATCH_PHASES, ("idle", "to_start", "align", "to_catch", "wrist_check", "pick_stub",
+                                        "to_release"))
 
 
 if __name__ == "__main__":

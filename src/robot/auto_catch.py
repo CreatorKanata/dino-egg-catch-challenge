@@ -4,11 +4,16 @@ Owner decisions (docs/spec/operating-modes.md, sections 1 and 4): after the base
 moves slowly to the recorded catch pose (head down, the wrist camera sees the egg), the wrist view
 must show the egg, the pick policy runs (a stub in this step: a notice, no motion), and the arm moves
 slowly to the release pose (home_pose.json, head up) with the gripper kept, so a caught egg stays
-held. Phases: align -> to_catch -> wrist_check -> pick_stub -> to_release -> idle. A failed wrist
+held. Phases: [to_start] -> align -> to_catch -> wrist_check -> pick_stub -> to_release -> idle.
+Owner decision (2026-09-25): an arm that the leader left off the release pose (any non-gripper joint
+farther than POSE_NEAR_TOLERANCE_DEG) first moves there in `to_start` with the base at zero, because
+driving with the head low or moving straight to the catch pose from an arbitrary pose could sweep
+the head through the egg; release -> catch is the known-safe path (CATCH_VIA_RELEASE_POSE switches
+it off for maintenance). Every scripted pose move is synchronized (all joints arrive together). A failed wrist
 check or a catch-pose timeout warns and still returns to the release pose; the warning is shown
 again when the arm is back ("Ready" only after a pass through the stub). Modeled on
 auto_release.py and reusing its gripper key and pose timeout, the shared alignment controller, and
-arm_follow's rate-limited approach. Every frame returns the base action and the arm pose to send;
+arm_follow's rate-limited, synchronized approach (all joints arrive together). Every frame returns the base action and the arm pose to send;
 the mode manager cancels the action on Stop (the loop then holds the arm and zeroes the base). Pure
 and stdlib-only; the caller passes the time, the egg and wrist detections, and the commanded pose.
 """
@@ -18,20 +23,26 @@ from dataclasses import dataclass, replace
 from typing import Final, Literal
 
 from robot.align import AlignResult, AlignState, align_step, start_align, zero_base
-from robot.arm_follow import approach_pose, within
-from robot.auto_release import GRIPPER_KEY
-from robot.config import ARM_ENGAGE_SPEED_DEG_S, ARM_ENGAGE_TOLERANCE_DEG, RELEASE_HOME_TIMEOUT_S
+from robot.arm_follow import approach_pose_sync, within
+from robot.auto_release import GRIPPER_KEY, JOINT_KEYS
+from robot.config import (
+    ARM_ENGAGE_SPEED_DEG_S,
+    ARM_ENGAGE_TOLERANCE_DEG,
+    CATCH_VIA_RELEASE_POSE,
+    POSE_NEAR_TOLERANCE_DEG,
+    RELEASE_HOME_TIMEOUT_S,
+)
 from robot.vision.config_vision import WRIST_CHECK_ENABLED, WRIST_CHECK_FRAMES
 from robot.vision.egg_size import SizeClass
 
 Pose = Mapping[str, float]
-CatchPhase = Literal["idle", "align", "to_catch", "wrist_check", "pick_stub", "to_release"]
-CATCH_PHASES: Final = ("idle", "align", "to_catch", "wrist_check", "pick_stub", "to_release")
-# Terminal: lost, align_timeout, release_timeout, done, and the two *_returned (back at the release
-# pose after a failure). The others only show a notice.
+CatchPhase = Literal["idle", "to_start", "align", "to_catch", "wrist_check", "pick_stub", "to_release"]
+CATCH_PHASES: Final = ("idle", "to_start", "align", "to_catch", "wrist_check", "pick_stub", "to_release")
+# Terminal: start_timeout, lost, align_timeout, release_timeout, done, and the two *_returned (back at
+# the release pose after a failure). The others only show a notice.
 CatchFailure = Literal["", "catch_timeout", "no_wrist_egg"]
-CatchOutcome = Literal["running", "lost", "align_timeout", "catch_timeout", "no_wrist_egg", "policy_stub",
-                       "release_timeout", "done", "catch_timeout_returned", "no_wrist_egg_returned"]
+CatchOutcome = Literal["running", "start_timeout", "lost", "align_timeout", "catch_timeout", "no_wrist_egg",
+                       "policy_stub", "release_timeout", "done", "catch_timeout_returned", "no_wrist_egg_returned"]
 RETURNED: Final = {"catch_timeout": "catch_timeout_returned", "no_wrist_egg": "no_wrist_egg_returned"}
 
 
@@ -44,6 +55,8 @@ class CatchLimits:
     pose_timeout_s: float = RELEASE_HOME_TIMEOUT_S
     wrist_check_frames: int = WRIST_CHECK_FRAMES
     wrist_check_enabled: bool = WRIST_CHECK_ENABLED
+    via_release_pose: bool = CATCH_VIA_RELEASE_POSE
+    near_tolerance: float = POSE_NEAR_TOLERANCE_DEG
 
 
 DEFAULT_CATCH_LIMITS: Final = CatchLimits()
@@ -51,11 +64,13 @@ DEFAULT_CATCH_LIMITS: Final = CatchLimits()
 
 @dataclass(frozen=True)
 class CatchRequest:
-    """What the Hi! check needs: the egg size class and the recorded poses (None = not recorded)."""
+    """What the Hi! check needs: the egg size class, the recorded poses (None = not recorded), and the
+    arm pose commanded now (None = unknown, treated as off the release pose)."""
 
     size: SizeClass = "none"
     catch: Pose | None = None
     home: Pose | None = None  # the release pose (home_pose.json)
+    arm: Pose | None = None
 
 
 @dataclass(frozen=True)
@@ -87,9 +102,13 @@ class CatchStep:
     align_result: AlignResult | None = None
 
 
-def start_catch(now: float, catch: Pose, home: Pose) -> CatchState:
-    """A fresh Auto Catch in the align phase (base at rest, egg not yet smoothed)."""
-    return CatchState(phase="align", started_at=now, align=start_align(now), catch=dict(catch), home=dict(home),
+def start_catch(now: float, catch: Pose, home: Pose, arm: Pose | None,
+                limits: CatchLimits = DEFAULT_CATCH_LIMITS) -> CatchState:
+    """A fresh Auto Catch: in `to_start` when the arm is off the release pose (or unknown) and the
+    rule is on, else in the align phase (base at rest, egg not yet smoothed)."""
+    off = arm is None or not within(arm, home, limits.near_tolerance, JOINT_KEYS)
+    phase: CatchPhase = "to_start" if limits.via_release_pose and off else "align"
+    return CatchState(phase=phase, started_at=now, align=start_align(now), catch=dict(catch), home=dict(home),
                       updated_at=now)
 
 
@@ -115,13 +134,25 @@ def _align(state: CatchState, egg: object | None, commanded: Pose, now: float) -
     return _terminal("lost" if result == "lost" else "align_timeout", commanded, result)
 
 
+def _to_start(state: CatchState, commanded: Pose, now: float, dt: float, limits: CatchLimits) -> CatchStep:
+    """Toward the release pose with the gripper held, base at zero; then a fresh alignment."""
+    if now - state.started_at > limits.pose_timeout_s:
+        return _terminal("start_timeout", commanded)
+    target = {**dict(state.home or {}), GRIPPER_KEY: float(commanded[GRIPPER_KEY])}
+    moved = approach_pose_sync(commanded, target, dt, limits.approach_speed, JOINT_KEYS)
+    if within(moved, target, limits.tolerance):
+        return CatchStep(replace(_next_phase(state, "align", now), align=start_align(now)), zero_base(), moved,
+                         "running")
+    return CatchStep(replace(state, updated_at=now), zero_base(), moved, "running")
+
+
 def _to_catch(state: CatchState, commanded: Pose, now: float, dt: float, limits: CatchLimits) -> CatchStep:
     """Toward the full catch pose, the gripper included (the mouth opens as recorded)."""
     if now - state.started_at > limits.pose_timeout_s:
         return _hold(_next_phase(replace(state, failure="catch_timeout"), "to_release", now), commanded,
                      "catch_timeout")
     target = dict(state.catch or {})
-    moved = approach_pose(commanded, target, dt, limits.approach_speed)
+    moved = approach_pose_sync(commanded, target, dt, limits.approach_speed)  # all keys arrive together
     if within(moved, target, limits.tolerance):
         return CatchStep(_next_phase(state, "wrist_check", now), zero_base(), moved, "running")
     return CatchStep(replace(state, updated_at=now), zero_base(), moved, "running")
@@ -146,7 +177,7 @@ def _to_release(state: CatchState, commanded: Pose, now: float, dt: float, limit
     if now - state.started_at > limits.pose_timeout_s:
         return _terminal("release_timeout", commanded)
     target = {**dict(state.home or {}), GRIPPER_KEY: float(commanded[GRIPPER_KEY])}
-    moved = approach_pose(commanded, target, dt, limits.approach_speed)
+    moved = approach_pose_sync(commanded, target, dt, limits.approach_speed, JOINT_KEYS)  # gripper held
     if within(moved, target, limits.tolerance):
         return _terminal(RETURNED[state.failure] if state.failure else "done", moved)
     return CatchStep(replace(state, updated_at=now), zero_base(), moved, "running")
@@ -165,6 +196,8 @@ def catch_step(
     and `commanded` the last arm pose sent. Terminal outcomes return an idle state, zero base
     velocities, and the arm pose to hold; an idle state holds the arm and changes nothing."""
     dt = now - state.updated_at
+    if state.phase == "to_start":
+        return _to_start(state, commanded, now, dt, limits)
     if state.phase == "align":
         return _align(state, egg, commanded, now)
     if state.phase == "to_catch":

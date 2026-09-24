@@ -28,8 +28,8 @@ ARM_TEXT = {
     "auto catch": "arm auto catch",
 }
 # Auto Catch phase on the mode line ("MANUAL - AUTO CATCH: to catch pose"); the stub is instantaneous.
-PHASE_TEXT = {"align": "aligning", "to_catch": "to catch pose", "wrist_check": "checking", "pick_stub": "checking",
-              "to_release": "to release pose"}
+PHASE_TEXT = {"to_start": "to start pose", "align": "aligning", "to_catch": "to catch pose",
+              "wrist_check": "checking", "pick_stub": "checking", "to_release": "to release pose"}
 SEPARATOR = "  |  "
 VOICE_TEXT = "mic on"
 STOPPED_TEXT = "STOPPED"

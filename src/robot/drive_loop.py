@@ -164,10 +164,10 @@ def _next_state(
     commands = devices.view.poll_commands() if devices.view is not None else ()
     release = (load_release_request(devices.arm_paths, classify_basket(state.basket))
                if wants_release(state.app, commands) else ReleaseRequest())
-    catch = (load_catch_request(devices.arm_paths, classify_size(state.egg))
-             if wants_catch(state.app, commands) else CatchRequest())
-    folded = fold_commands(state.app, commands, now, catch, release)
     arm_hold = devices.adapter.arm_hold
+    catch = (load_catch_request(devices.arm_paths, classify_size(state.egg), arm_hold)
+             if wants_catch(state.app, commands) else CatchRequest())
+    folded = fold_commands(state.app, commands, now, catch, release, devices.catch_limits)
     folded, catch_base, catch_arm, trace = step_auto_catch(folded, state.egg, state.wrist, arm_hold, now,
                                                            devices.catch_limits)
     folded, release_base, release_arm = step_auto_release(folded, state.basket, arm_hold, now)

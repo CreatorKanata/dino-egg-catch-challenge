@@ -25,8 +25,8 @@ ZEROS = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
 HOLD = {key: 0.0 for key in ARM_KEYS}
 NEAR = {key: 1.0 for key in ARM_KEYS}
 FAR = {key: 90.0 for key in ARM_KEYS}
-ALIGNING = AppState(action="auto_catch", catch=start_catch(0.0, HOLD, NEAR))
-READY = CatchRequest(size="ok", catch=NEAR, home=HOLD)
+ALIGNING = AppState(action="auto_catch", catch=start_catch(0.0, HOLD, NEAR, NEAR))
+READY = CatchRequest(size="ok", catch=NEAR, home=HOLD, arm=HOLD)
 FAR_EGG = EggDetection(cx=0.8, cy=0.5, w=0.2, h=0.3, color="green", spots=3, area_px=5000)
 
 

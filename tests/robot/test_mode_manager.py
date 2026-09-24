@@ -21,7 +21,7 @@ POSE = {key: 0.0 for key in ARM_KEYS}
 class StopTests(unittest.TestCase):
     def test_stop_resets_everything_from_any_state(self):
         busy = AppState(mode="fsc", action="auto_catch", voice_listening=True, notice="x", notice_until=1.0,
-                        notice_level="warning", catch=start_catch(0.0, POSE, POSE))
+                        notice_level="warning", catch=start_catch(0.0, POSE, POSE, POSE))
         for start in (AppState(), busy):
             with self.subTest(start=start):
                 result = apply_command(start, "stop", 10.0)

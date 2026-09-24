@@ -18,9 +18,9 @@ from robot.vision.egg_size import EggDetection
 
 HOME = {key: 0.0 for key in ARM_KEYS}
 CATCH = {key: 10.0 for key in ARM_KEYS}
-READY = CatchRequest(size="ok", catch=CATCH, home=HOME)
+READY = CatchRequest(size="ok", catch=CATCH, home=HOME, arm=HOME)  # the arm is at the release pose
 FAR_EGG = EggDetection(cx=0.8, cy=0.5, w=0.2, h=0.3, color="green", spots=3, area_px=5000)
-RUNNING = replace(AppState(), action="auto_catch", catch=start_catch(0.0, CATCH, HOME))
+RUNNING = replace(AppState(), action="auto_catch", catch=start_catch(0.0, CATCH, HOME, HOME))
 ZEROS = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
 
 
@@ -39,7 +39,9 @@ class StartTests(unittest.TestCase):
 
     def test_ready_starts_the_alignment(self):
         result = start_auto_catch(AppState(), READY, 2.0)
-        self.assertEqual((result.state.action, result.state.catch), ("auto_catch", start_catch(2.0, CATCH, HOME)))
+        self.assertEqual((result.state.action, result.state.catch), ("auto_catch", start_catch(2.0, CATCH, HOME, HOME)))
+        low = start_auto_catch(AppState(), replace(READY, arm={**HOME, "arm_wrist_flex.pos": 40.0}), 2.0)
+        self.assertEqual((low.state.action, low.state.catch.phase), ("auto_catch", "to_start"))
         self.assertEqual((result.state.notice, result.state.notice_level), ("Aligning...", "info"))
         self.assertTrue(result.disengage_arm)
         self.assertFalse(manual_control_allowed(result.state))
@@ -57,7 +59,7 @@ class StartTests(unittest.TestCase):
 
 class RunningTests(unittest.TestCase):
     def test_presses_ignored_and_stop_cancels_in_every_phase(self):
-        for phase in ("align", "to_catch", "wrist_check", "pick_stub", "to_release"):
+        for phase in ("to_start", "align", "to_catch", "wrist_check", "pick_stub", "to_release"):
             busy = replace(RUNNING, catch=replace(RUNNING.catch, phase=phase))
             with self.subTest(phase=phase):
                 for command in ("hi", "thx", "mode_toggle"):
@@ -74,6 +76,7 @@ class RunningTests(unittest.TestCase):
         terminal = (("done", "Ready", "info"), ("lost", "Egg lost", "warning"),
                     ("align_timeout", "Could not align", "warning"),
                     ("release_timeout", "Arm did not reach the release pose", "warning"),
+                    ("start_timeout", "Arm did not reach the release pose", "warning"),
                     ("catch_timeout_returned", "Arm did not reach the catch pose", "warning"),
                     ("no_wrist_egg_returned", "Egg not in wrist view", "warning"))
         for outcome, notice, level in terminal:

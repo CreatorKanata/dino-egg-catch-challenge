@@ -67,9 +67,10 @@ class CommandResult:
     disengage_arm: bool
 
 
-def _apply(app: AppState, command: str, now: float, catch: CatchRequest, release: ReleaseRequest) -> Transition:
+def _apply(app: AppState, command: str, now: float, catch: CatchRequest, release: ReleaseRequest,
+           limits: CatchLimits) -> Transition:
     if command == "hi" and app.mode == "manual":
-        return start_auto_catch(app, catch, now)
+        return start_auto_catch(app, catch, now, limits=limits)
     if command == "thx" and app.mode == "manual":
         return start_auto_release(app, release, now)
     return apply_command(app, command, now)
@@ -81,6 +82,7 @@ def fold_commands(
     now: float,
     catch: CatchRequest = CatchRequest(),
     release: ReleaseRequest = ReleaseRequest(),
+    catch_limits: CatchLimits = DEFAULT_CATCH_LIMITS,
 ) -> CommandResult:
     """Apply commands in arrival order, then expire the notice; stop flags are OR-ed.
 
@@ -91,7 +93,7 @@ def fold_commands(
     """
     stop_base = disengage_arm = False
     for command in commands:
-        transition = _apply(app, command, now, catch, release)
+        transition = _apply(app, command, now, catch, release, catch_limits)
         app = transition.state
         stop_base = stop_base or transition.stop_base
         disengage_arm = disengage_arm or transition.disengage_arm

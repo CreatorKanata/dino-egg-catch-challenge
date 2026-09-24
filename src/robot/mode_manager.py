@@ -13,7 +13,7 @@ and starts Auto Release (auto_release.py). The pick policy and FSC are still dis
 from dataclasses import dataclass, replace
 from typing import Final, Literal
 
-from robot.auto_catch import CatchOutcome, CatchRequest, CatchState, start_catch
+from robot.auto_catch import DEFAULT_CATCH_LIMITS, CatchLimits, CatchOutcome, CatchRequest, CatchState, start_catch
 from robot.auto_release import ReleaseOutcome, ReleaseRequest, ReleaseState, start_release
 from robot.config import NOTICE_SECONDS
 
@@ -42,6 +42,7 @@ NOTICE_SIZE: Final = {"none": "No egg in view", "too_small": "Egg too far", "too
 NOTICE_ALIGNING: Final = "Aligning..."
 NOTICE_NO_CATCH: Final = "Catch pose not recorded"
 NOTICE_CATCH: Final = {
+    "start_timeout": ("Arm did not reach the release pose", "warning"),
     "lost": ("Egg lost", "warning"),
     "align_timeout": ("Could not align", "warning"),
     "catch_timeout": ("Arm did not reach the catch pose", "warning"),
@@ -52,8 +53,8 @@ NOTICE_CATCH: Final = {
     "catch_timeout_returned": ("Arm did not reach the catch pose", "warning"),  # shown again once back
     "no_wrist_egg_returned": ("Egg not in wrist view", "warning"),
 }
-CATCH_TERMINAL: Final = ("lost", "align_timeout", "release_timeout", "done", "catch_timeout_returned",
-                         "no_wrist_egg_returned")
+CATCH_TERMINAL: Final = ("start_timeout", "lost", "align_timeout", "release_timeout", "done",
+                         "catch_timeout_returned", "no_wrist_egg_returned")
 NOTICE_CAPTURED: Final = "Captured"
 NOTICE_CAPTURE_FAILED: Final = "Capture failed"
 
@@ -149,12 +150,14 @@ def apply_command(state: AppState, command: str, now: float, notice_s: float = N
 
 
 def start_auto_catch(
-    state: AppState, request: CatchRequest, now: float, notice_s: float = NOTICE_SECONDS
+    state: AppState, request: CatchRequest, now: float, notice_s: float = NOTICE_SECONDS,
+    limits: CatchLimits = DEFAULT_CATCH_LIMITS,
 ) -> Transition:
     """`Hi!` in Manual Mode with the latest front-camera size class and the recorded poses.
 
     A size other than "ok", a missing catch pose, or a missing release pose (home) shows a warning
-    notice and nothing moves; otherwise the alignment starts. Only in Manual Mode, not stopped, and
+    notice and nothing moves; otherwise Auto Catch starts (with the move to the release pose first
+    when the arm is off it, see auto_catch.start_catch). Only in Manual Mode, not stopped, and
     with no action running; otherwise the state is unchanged.
     """
     if state.mode != "manual" or state.stopped or state.action != "none":
@@ -165,7 +168,7 @@ def start_auto_catch(
         return Transition(state=with_notice(state, NOTICE_NO_CATCH, now, notice_s, "warning"))
     if request.home is None:
         return Transition(state=with_notice(state, NOTICE_NO_HOME, now, notice_s, "warning"))
-    started = replace(state, action="auto_catch", catch=start_catch(now, request.catch, request.home))
+    started = replace(state, action="auto_catch", catch=start_catch(now, request.catch, request.home, request.arm, limits))
     return Transition(state=with_notice(started, NOTICE_ALIGNING, now, notice_s), disengage_arm=True)
 
 

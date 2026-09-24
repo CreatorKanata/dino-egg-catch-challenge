@@ -4,8 +4,8 @@ Uses the fake devices in loop_fakes.py with the egg detector returning an egg at
 alignment ends quickly), the wrist check patched, and the recorded poses in a temporary directory.
 Verified without hardware or OpenCV: the arm moving slowly to the catch pose and back to the
 release pose, the wrist check running only during its frames, a disabled check proceeding to the
-policy stub, an enabled check without an egg returning to the release pose, the missing catch pose
-refusal, Stop in an arm phase, the phase on the signboard, and the catch-pose staff key. A fake
+policy stub, an enabled check without an egg returning to the release pose, an arm left off the
+release pose moving there first (base at zero) before the alignment, the missing catch pose refusal, Stop in an arm phase, the phase on the signboard, and the catch-pose staff key. A fake
 monotonic clock advances one loop period per frame. Skipped when LeRobot is unavailable.
 """
 
@@ -126,6 +126,22 @@ class CatchLoopTests(unittest.TestCase):
         notices = [notice for _, notice, _ in frames]
         self.assertIn("Catch: policy not available yet", notices)
         self.assertNotIn("Egg not in wrist view", notices)
+
+    def test_arm_off_the_release_pose_moves_there_before_aligning(self):
+        state = self.run_frame(DRIVING)
+        self.parts.adapter.arm_hold = {**HOLD, "arm_wrist_flex.pos": 45.0}  # the leader left the head low
+        state = self.run_frame(state, "hi")
+        self.assertEqual(state.app.catch.phase, "to_start")
+        phases = []
+        for _ in range(300):
+            state = self.run_frame(state)
+            phases.append(state.app.catch.phase)
+            if state.app.catch.phase == "align":
+                break
+            self.assertEqual(self.parts.adapter.sent[-1], ZEROS)  # the base never moves while the arm does
+        self.assertEqual(self.view.rendered[-2][2].phase, "to_start")
+        self.assert_near(self.parts.adapter.arms[-1], HOLD, [key for key in ARM_KEYS if key != GRIPPER])
+        self.assertEqual(phases[-1], "align")
 
     def test_missing_catch_pose_refuses_and_nothing_moves(self):
         self.use(DISABLED, temp_arm_paths(self, catch=None))

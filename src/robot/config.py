@@ -237,14 +237,12 @@ CAPTURE_KEY: Final = "c"
 CAPTURE_COMMAND: Final = "capture"  # signboard -> parent command line for the capture key
 
 # --- Arm data: release pose (home), release motion, catch pose (Phase 3), staff keys ----------
-# Basket detector, basket alignment target, and tolerances: robot/vision/config_vision.py.
-# Data files (JSON recorded on the robot with the keys below), relative to the repository root.
+# Data files (JSON recorded on the robot with the keys below), relative to the repo root. Basket: config_vision.py.
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 HOME_POSE_PATH: Final = "data/arm/home_pose.json"
 RELEASE_MOTION_PATH: Final = "data/arm/release_motion.json"
 CATCH_POSE_PATH: Final = "data/arm/catch_pose.json"  # head down: the wrist camera sees the aligned egg
-# Staff keys (KEYDOWN in the signboard, like CAPTURE_KEY). Not "h": the KachiButton types the "h"
-# of "Thx" and "Hi!" as key presses too, so every Thx/Hi! would overwrite the home pose.
+# Staff keys (KEYDOWN, like CAPTURE_KEY). Not "h": the KachiButton types the "h" of "Thx" and "Hi!" as keys.
 HOME_KEY: Final = "b"  # save the commanded arm pose as the home (base) pose
 RECORD_KEY: Final = "r"  # start / stop recording the release motion
 CATCH_POSE_KEY: Final = "k"  # save the commanded arm pose as the catch pose
@@ -255,6 +253,8 @@ RELEASE_HOME_TIMEOUT_S: Final = 8.0  # arm approach to a recorded pose (home, ca
 RELEASE_PLAYBACK_SPEED: Final = 1.0  # 1.0 = recorded speed; 0.5 was used for the first robot test (2026-09-25), which the owner found slow
 RELEASE_MAX_JOINT_STEP_DEG_PER_S: Final = 90.0  # playback: per-frame change cap on every joint
 RECORD_MAX_S: Final = 30.0  # a release recording stops and saves itself at this length
+CATCH_VIA_RELEASE_POSE: Final = True  # Auto Catch first moves an arm off the release pose there (base zero)
+POSE_NEAR_TOLERANCE_DEG: Final = 15.0  # "off" = a non-gripper joint farther than this (owner, 2026-09-25)
 
 if type(ENCODER_CLICKS_PER_REVOLUTION) is not int or ENCODER_CLICKS_PER_REVOLUTION <= 0:
     raise ValueError("ENCODER_CLICKS_PER_REVOLUTION must be a positive int")
@@ -296,5 +296,5 @@ if len({key.lower() for key in _STAFF_KEYS}) != len(_STAFF_KEYS) or any(
     raise ValueError("Staff keys: distinct single characters that no KachiButton phrase contains")
 if not 0 < RELEASE_PLAYBACK_SPEED <= 2:
     raise ValueError("RELEASE_PLAYBACK_SPEED must be in (0, 2]")
-if not (RELEASE_HOME_TIMEOUT_S > 0 and RELEASE_MAX_JOINT_STEP_DEG_PER_S > 0 and RECORD_MAX_S > 0):
-    raise ValueError("RELEASE_HOME_TIMEOUT_S, RELEASE_MAX_JOINT_STEP_DEG_PER_S, RECORD_MAX_S must be positive")
+if min(RELEASE_HOME_TIMEOUT_S, RELEASE_MAX_JOINT_STEP_DEG_PER_S, RECORD_MAX_S, POSE_NEAR_TOLERANCE_DEG) <= 0:
+    raise ValueError("Arm timeouts, the joint step cap, RECORD_MAX_S, POSE_NEAR_TOLERANCE_DEG must be positive")

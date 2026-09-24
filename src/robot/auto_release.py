@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 from typing import Final, Literal
 
 from robot.align import AlignGains, AlignState, AlignTarget, align_step, start_align, zero_base
-from robot.arm_follow import approach_pose, within
+from robot.arm_follow import approach_pose, approach_pose_sync, within
 from robot.config import (
     ALIGN_FULL_SPEED_ERROR_H,
     ARM_ENGAGE_SPEED_DEG_S,
@@ -129,7 +129,7 @@ def _home(state: ReleaseState, commanded: Pose, now: float, dt: float, limits: R
     if now - state.started_at > limits.home_timeout_s:
         return _terminal("home_timeout", commanded)
     target = {**dict(state.home or {}), GRIPPER_KEY: float(commanded[GRIPPER_KEY])}
-    moved = approach_pose(commanded, target, dt, limits.approach_speed)
+    moved = approach_pose_sync(commanded, target, dt, limits.approach_speed, JOINT_KEYS)  # together, gripper held
     if within(moved, target, limits.tolerance):
         return ReleaseStep(_next_phase(state, "play", now), zero_base(), moved, "play_started")
     return ReleaseStep(replace(state, updated_at=now), zero_base(), moved, "running")
@@ -145,7 +145,7 @@ def _play(state: ReleaseState, commanded: Pose, now: float, dt: float, limits: R
         if now - state.started_at > limits.home_timeout_s:
             return _terminal("start_timeout", commanded)
         target = {**dict(first), GRIPPER_KEY: float(commanded[GRIPPER_KEY])}
-        moved = approach_pose(commanded, target, dt, limits.approach_speed)
+        moved = approach_pose_sync(commanded, target, dt, limits.approach_speed, JOINT_KEYS)
         return ReleaseStep(replace(state, updated_at=now), zero_base(), moved, "running")
     index = min(max(state.index, 0), last_index)
     target = state.frames[index]
@@ -163,7 +163,7 @@ def _return_home(state: ReleaseState, commanded: Pose, now: float, dt: float, li
     if now - state.started_at > limits.home_timeout_s:
         return _terminal("home_timeout", commanded)
     home = dict(state.home or {})
-    moved = approach_pose(commanded, home, dt, limits.approach_speed)
+    moved = approach_pose_sync(commanded, home, dt, limits.approach_speed)
     if within(moved, home, limits.tolerance):
         return _terminal("done", moved)
     return ReleaseStep(replace(state, updated_at=now), zero_base(), moved, "running")
