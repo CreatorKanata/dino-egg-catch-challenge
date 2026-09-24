@@ -42,7 +42,7 @@ Rules that apply to every switch:
 
 ### Emergency stop behavior
 
-`Stop` (or ESC / closing the signboard, or Ctrl+C) is a full stop and full reset (owner decision): it zeroes the base, cancels any automatic action, discards pending encoder rotation, clears voice input, and holds the arm at its current pose with torque kept on. After `Stop` the application is in Manual Mode with arm following disengaged; following resumes through the slow engagement below.
+`Stop` (or ESC / closing the signboard, or Ctrl+C) is a full stop and full reset (owner decision): it zeroes the base, cancels any automatic action, discards pending encoder rotation, clears voice input, and holds the arm at its current pose with torque kept on. After `Stop` the application is latched in a stopped state: the base stays at zero and the arm stays held, `Hi!` and `Thx` are ignored, and the signboard shows "STOPPED. Press Go Go! to resume" until `Go Go!` is pressed. That press returns to Manual Mode (it does not toggle to FSC) with arm following disengaged; following then resumes through the slow engagement below. Nothing moves again on its own after a stop. *Latch behavior chosen at review on 2026-09-24; confirm.*
 
 Arm torque is deliberately not released on `Stop`: the SO-ARM101 has no brakes, so a limp arm would fall under gravity, drop a held egg, and could hit the field or a hand. The ZMQ action protocol also carries only positions and velocities; the host releases torque only when it disconnects (`disable_torque_on_disconnect`). If staff need to move the arm by hand, they stop the host process instead. This stop travels through the signboard process and the control loop, so it is a software stop measured in tens of milliseconds; the Pi host's 500 ms command watchdog remains the last line.
 
@@ -52,7 +52,7 @@ Arm torque is deliberately not released on `Stop`: the SO-ARM101 has no brakes, 
 - Arm: follows the leader arm (`so100_leader`, id `dino_leader_arm`) joint for joint, including the gripper (the mouth). Leaving the leader arm resting at its home position keeps the dinosaur arm at home; this is the operating rule (owner decision), and there is no separate "go home" button.
 - Engagement (owner decision): when Manual Mode starts, or after a stop, the follower moves slowly toward the leader's pose at `ARM_ENGAGE_SPEED_DEG_S` per joint. Real-time following begins only once every joint is within `ARM_ENGAGE_TOLERANCE_DEG` of the leader. The signboard shows "arm syncing" until then. This removes the jump a mismatched leader would otherwise cause.
 - If the leader arm cannot be read (disconnected, bus error), the follower holds its last commanded pose and the signboard shows the fault; the base keeps working.
-- The shaft button on the dino-controller has no role for now (Catch moved to `Hi!`, stop is the second KachiButton).
+- The shaft button on the dino-controller has no role (`SHAFT_BUTTON_ROLE = "none"`): Catch moved to `Hi!`, stop is the second KachiButton. It stays wired and reported for a later use.
 
 ## 4. Auto Catch and Auto Release details
 

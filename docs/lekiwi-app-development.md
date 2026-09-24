@@ -87,28 +87,39 @@ Do not send the overhead camera through `LeKiwiClientConfig.cameras`. That field
 
 ## 5. Application layout (implemented, unit-tested without hardware)
 
-Following the working agreements (single-purpose modules, 300-line limit, tunables in `config.py`, hardware-independent tests). Details, run commands, and the input mapping are in [src/robot/README.md](../src/robot/README.md).
+Following the working agreements (single-purpose modules, 300-line limit, tunables in `config.py`, hardware-independent tests). The operating modes (Manual Mode, Auto Catch, Auto Release, Full Self-Catching (FSC)) and the KachiButton controls are specified in [spec/operating-modes.md](spec/operating-modes.md). Phase 1 is implemented: Manual Mode (the former Drive Mode plus leader-arm puppeteering with slow engagement), the mode manager, KachiButton phrase detection through the signboard, and the mode text on the signboard; Auto Catch, Auto Release, and FSC are display-only stubs that never move the robot. Details, run commands, the KachiButton table, and the input mapping are in [src/robot/README.md](../src/robot/README.md).
 
 ```
 pyproject.toml               # LeRobot fork [lekiwi,viz] + pyserial + pygame-ce; uv package = false
 src/robot/
-  config.py                  # Pi address, ZMQ ports, serial port, camera index, speed levels, roles
+  config.py                  # Pi address, ZMQ ports, serial ports, leader arm, KachiButton phrases, speed levels, roles
   dino_controller_reader.py  # serial JSON v0 lines -> immutable ControllerState (stdlib + lazy pyserial)
   controller_to_action.py    # ControllerState -> {x.vel, y.vel, theta.vel}; pure function
   drive_state.py             # frozen DriveState and the stop/drive decision; pure
+  kachi_phrases.py           # typed text -> KachiButton commands (exact phrases, 1 s gap); pure
+  mode_manager.py            # frozen AppState and the Stop / mode toggle / Hi! / Thx rules; pure
+  arm_follow.py              # slow engagement toward the leader pose, then following; pure
+  manual_mode.py             # per-frame composition: commands, base action, arm pose, arm status; pure
+  display_status.py          # frozen DisplayStatus sent to the signboard; pure
+  leader_arm.py              # SO100Leader wrapper: read_pose() -> six arm_* keys or None (lazy LeRobot)
   top_camera.py              # OpenCVCamera wrapper for the overhead view
-  lekiwi_adapter.py          # LeKiwiClient wrapper: connect + capture arm pose, observe, send, stop
-  signboard_layout.py        # pure signboard layout and status text
-  signboard.py               # pygame attendee signboard (display only; ESC/close ends Drive Mode)
-  signboard_protocol.py      # pipe packets: JSON header line + raw BGR frames
-  signboard_process.py       # signboard child entry point; never imports LeRobot or cv2
-  signboard_client.py        # starts the child and streams the newest packet without blocking
-  drive_loop.py              # one loop iteration + 30 Hz loop: controller, adapter, cameras, views
-  teleop_drive.py            # Drive Mode entry point: CLI, connect, zeros-first shutdown
+  lekiwi_adapter.py          # LeKiwiClient wrapper: connect + capture arm pose, observe, send base + arm pose, stop
+  signboard_layout.py        # pure signboard layout and three-line status text
+  signboard.py               # pygame attendee signboard: draw, ESC/close, typed text (child only)
+  signboard_protocol.py      # pipe packets (JSON header + raw BGR frames) and command lines
+  signboard_process.py       # signboard child entry point; prints KachiButton commands; never imports LeRobot or cv2
+  signboard_client.py        # starts the child, streams the newest packet, collects commands
+  drive_loop.py              # one loop iteration + 30 Hz loop: controller, commands, leader, adapter, cameras, views
+  teleop_drive.py            # Manual Mode entry point: CLI, connect, zeros-first shutdown
 tests/robot/
   test_dino_controller_reader.py
   test_controller_to_action.py
   test_drive_state.py
+  test_kachi_phrases.py
+  test_mode_manager.py
+  test_arm_follow.py
+  test_manual_mode.py
+  test_leader_arm.py
   test_lekiwi_adapter.py
   test_signboard_layout.py
   test_signboard.py
@@ -119,7 +130,7 @@ tests/robot/
 
 The dino-controller protocol is specified in [dino-controller-protocol.md](dino-controller-protocol.md). The reader buffers to LF, tolerates ESP32 boot text, requires a combined `state` snapshot before applying input, replaces the cached joystick state on every `joystick` or `state` message, and drops held inputs after `ready`, `error`, or a sequence gap. Held directions are not repeated, so the action mapper works from the latest cached state at loop rate rather than from events. Because unchanged inputs produce no traffic, the reader sends `STATE` every 0.2 s so that a 0.5 s silence reliably means input loss.
 
-The attendee display is a pygame signboard window (owner decision, 2026-09-24); Rerun is an operator-only view and is opt-in (`--rerun`). The signboard runs as a separate interpreter fed over a pipe, because opencv and pygame each bundle `libSDL2` on macOS and cannot safely share one process.
+The attendee display is a pygame signboard window (owner decision, 2026-09-24); Rerun is an operator-only view and is opt-in (`--rerun`). The signboard runs as a separate interpreter fed over a pipe, because opencv and pygame each bundle `libSDL2` on macOS and cannot safely share one process. The signboard window keeps keyboard focus, so KachiButton phrases arrive there and return to the control loop as JSON command lines on the child's stdout.
 
 ### Owner decisions (2026-09-24)
 
@@ -133,7 +144,7 @@ The attendee display is a pygame signboard window (owner decision, 2026-09-24); 
 
 | Question | Options under consideration | Default in `config.py` |
 | --- | --- | --- |
-| Arm during Drive Mode | Hold the current pose or hold a fixed driving pose (sending no arm keys is not possible, see section 2) | Hold the pose observed at connect (`ARM_MODE = "hold_initial_pose"`); arm keys never come from controller input |
+| Arm during Manual Mode | Superseded by the owner decisions in [spec/operating-modes.md](spec/operating-modes.md): the arm follows the leader arm after a slow engagement | Pose observed at connect held until engagement; last commanded pose held in FSC, after `Stop`, on a leader fault, and with `--no-leader`. `ARM_ENGAGE_SPEED_DEG_S` (30) and `ARM_ENGAGE_TOLERANCE_DEG` (3) are proposals to tune on the robot |
 | Shaft button role | Emergency stop, speed change, or Catch trigger for a later policy hand-off | `SHAFT_BUTTON_ROLE = "catch"`: the base stops while held; no arm motion yet |
 | Loss of controller input | Send zero velocities immediately; the host watchdog is a backstop, not the primary stop | Zero velocities after 0.5 s without a valid message or while unsynchronized (`CONTROLLER_INPUT_TIMEOUT_S`) |
 
