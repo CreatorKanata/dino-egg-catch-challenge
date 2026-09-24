@@ -38,7 +38,7 @@ Rules that apply to every switch:
 - Switching modes first sends zero base velocities and holds the arm where it is. No mode starts with motion.
 - Auto Catch and Auto Release are one-shot actions that return to Manual Mode when they finish, fail their precondition, or are stopped.
 - A press while an automatic action is running is ignored; `Stop` always works.
-- The signboard shows the current mode in large text (Manual or FSC first; richer artwork later), the running action, and for a rejected Auto Catch or Auto Release the reason ("no egg in view", "egg too small", "basket not in view") for a few seconds.
+- The signboard shows the current mode in large text (Manual or FSC first; richer artwork later), the running action, and for a rejected Auto Catch or Auto Release the reason ("No egg in view", "Egg too far", "Egg too close", "Egg lost", "Could not align", "Basket not in view") for a few seconds in the warning color. There is never a dialog to dismiss: attendees have no cursor.
 
 ### Emergency stop behavior
 
@@ -58,13 +58,13 @@ Arm torque is deliberately not released on `Stop`: the SO-ARM101 has no brakes, 
 
 ### Auto Catch
 
-1. Precondition, evaluated on the front camera at the press: an egg is detected and its apparent size is at least `AUTO_CATCH_MIN_EGG_PX`. Otherwise "no egg in view" or "egg too small" and nothing moves.
+1. Precondition, evaluated on the front camera at the press: an egg is detected and its bounding-box height, as a fraction of the frame height, lies between `AUTO_CATCH_MIN_EGG_H` (too far) and `AUTO_CATCH_MAX_EGG_H` (too close). Otherwise "No egg in view", "Egg too far", or "Egg too close" and nothing moves. The best position is stored as the normalized bbox center and height (`ALIGN_TARGET_*`) measured from a reference frame captured on the robot with the egg placed where the owner wants it; the signboard draws that position as an egg-shaped outline at all times in Manual Mode so it also guides manual driving (owner suggestion, 2026-09-24).
 2. Alignment (owner decision): the front camera gives the egg's position relative to the body. An image-based controller drives the base until the egg reaches the predefined target position and size in the front image, the one the pick policy was trained from. This step is what raises the catch success rate; the pick policy never has to compensate for base placement.
 3. Catch: the pick policy runs on the wrist camera only (owner decision, consistent with the golf-ball result). Success is checked before the signboard says "caught".
 
 ### Auto Release
 
-1. Precondition: the pink basket is detected in the front camera at or above `AUTO_RELEASE_MIN_BASKET_PX`. Otherwise "basket not in view".
+1. Precondition: the pink basket is detected in the front camera at or above `AUTO_RELEASE_MIN_BASKET_H` (normalized height). Otherwise "Basket not in view".
 2. The arm moves to the home/base pose (neck folded) while keeping the gripper angle unchanged so the egg stays held.
 3. A recorded release motion (a fixed joint trajectory, not a learned policy) delivers the egg into the basket and opens the mouth, then returns to home.
 
