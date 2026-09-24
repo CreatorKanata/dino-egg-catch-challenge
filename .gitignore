@@ -39,3 +39,6 @@ node_modules/
 # Large tablecloth artwork stays local pending explicit size approval.
 /images/makerfaire/tablecloth/tablecloth_maekake_1800_1570.ai
 /images/makerfaire/tablecloth/tablecloth.psd
+
+# LeRobot CLI output (lerobot-find-cameras captures, evaluation outputs) stays local.
+/outputs/
