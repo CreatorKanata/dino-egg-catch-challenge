@@ -118,11 +118,29 @@ class SmoothingAndRateTests(unittest.TestCase):
         self.assertAlmostEqual(state.smoothed.cx, 0.7)  # EMA, not the raw on-target sample
         self.assertEqual(state.ok_frames, 0)
 
-    def test_missing_detection_ramps_down_and_keeps_average(self):
+    def test_flicker_keeps_steering_on_the_smoothed_egg(self):
+        patient = replace(GAINS, lost_frames=5)
         moving = replace(start_align(0.0), smoothed=Measurement(0.9, 0.6), last_y=-0.05, updated_at=0.0)
-        state, base, result = align_step(moving, None, FRAME, TARGET, GAINS)
+        state, base, result = align_step(moving, None, FRAME, TARGET, patient)
         self.assertEqual((result, state.lost_frames, state.smoothed), ("running", 1, Measurement(0.9, 0.6)))
-        self.assertAlmostEqual(base["y.vel"], -0.045)
+        self.assertAlmostEqual(base["y.vel"], -0.055)  # still accelerating toward the -0.06 target
+        state, base, _ = align_step(state, None, 2 * FRAME, TARGET, patient)
+        self.assertAlmostEqual(base["y.vel"], -0.06)
+        state, base, _ = align_step(state, Egg(0.9, 0.6), 3 * FRAME, TARGET, patient)
+        self.assertEqual((state.lost_frames, base["y.vel"] < 0), (0, True))
+
+    def test_flicker_does_not_reset_done_progress(self):
+        gains = replace(FAST, done_frames=4, lost_frames=5)
+        state = start_align(0.0)
+        for frame, egg in enumerate((ON_TARGET, ON_TARGET, None, None, ON_TARGET)):
+            state, _, result = align_step(state, egg, FRAME * frame, TARGET, gains)
+            self.assertEqual(result, "running")
+        self.assertEqual(state.ok_frames, 3)  # two misses kept the count; nothing counted for them
+        self.assertEqual(align_step(state, ON_TARGET, 1.0, TARGET, gains)[2], "done")
+
+    def test_no_egg_yet_means_zero_command(self):
+        state, base, _ = align_step(start_align(0.0), None, FRAME, TARGET, GAINS)
+        self.assertEqual((base, state.smoothed), (zero_base(), None))
 
 
 class StepResultTests(unittest.TestCase):

@@ -3,8 +3,10 @@
 Runs the detector with the thresholds in config.py on one image (normally a capture from the
 signboard's `c` key), prints every detection, and writes `<image>-detected.png` with the boxes
 and the alignment target drawn, so the owner can tune the HSV ranges at the venue without the
-robot. `--rgb` reads an RGB-ordered image, such as a signboard screenshot of the Pi cameras taken
-before the color-order fix (PI_CAMERA_COLOR_ORDER in config.py).
+robot. `--debug` also lists every candidate contour after the open/close stage with its
+measurements and the rule that rejected it. `--rgb` reads an RGB-ordered image, such as a
+signboard screenshot of the Pi cameras taken before the color-order fix (PI_CAMERA_COLOR_ORDER in
+config.py).
 """
 
 import argparse
@@ -15,7 +17,7 @@ from typing import Any
 import cv2
 
 from robot.config import ALIGN_TARGET_CX, ALIGN_TARGET_CY, ALIGN_TARGET_H, ALIGN_TARGET_W
-from robot.vision.egg_detector import detect_eggs
+from robot.vision.egg_detector import Candidate, detect_eggs, inspect_candidates
 from robot.vision.egg_size import EggDetection, classify_size
 from robot.vision.frames import rgb_to_bgr
 
@@ -29,6 +31,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Detect eggs in one image with the thresholds in config.py.")
     parser.add_argument("image", type=Path, help="PNG or JPEG image (BGR as saved by the capture key)")
     parser.add_argument("--rgb", action="store_true", help="the image is RGB-ordered (old signboard screenshot)")
+    parser.add_argument("--debug", action="store_true",
+                        help="list every candidate component with its measurements and rejection reason")
     return parser.parse_args(argv)
 
 
@@ -41,6 +45,18 @@ def describe(index: int, det: EggDetection) -> str:
     return (f"{index}: {det.color} egg  cx={det.cx:.3f} cy={det.cy:.3f} w={det.w:.3f} h={det.h:.3f}  "
             f"spots={det.spots} area={det.area_px}px solidity={det.solidity:.3f} "
             f"border={'yes' if det.touches_border else 'no'}  size={classify_size(det)}")
+
+
+def describe_candidate(candidate: Candidate) -> str:
+    """One --debug line: pixel bbox, area, aspect, solidity, fill, border, spot pixels, verdict."""
+    measured = bool(candidate.spots)  # shape and spots are measured only past the area and aspect rules
+    solidity = f"{candidate.solidity:.2f}" if measured else "-"
+    fill = "-" if candidate.fill is None else f"{candidate.fill:.2f}"
+    spots = " ".join(f"{color}={pixels}px/{count}" for color, (count, pixels) in candidate.spots.items()) or "-"
+    verdict = "EGG" if candidate.rejected is None else f"rejected: {candidate.rejected}"
+    return (f"  bbox=({candidate.x},{candidate.y},{candidate.w},{candidate.h}) area={candidate.area_px} "
+            f"aspect={candidate.aspect:.2f} solidity={solidity} fill={fill} "
+            f"border={'yes' if candidate.touches_border else 'no'} spots[{spots}]  {verdict}")
 
 
 def _box(frame: Any, cx: float, cy: float, w: float, h: float) -> tuple[tuple[int, int], tuple[int, int]]:
@@ -75,6 +91,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"{args.image}: {width}x{height}, {len(detections)} egg(s)")
     for index, det in enumerate(detections, start=1):
         print(describe(index, det))
+    if args.debug:
+        candidates = inspect_candidates(frame)
+        print(f"{len(candidates)} candidate(s) after open/close:")
+        for candidate in candidates:
+            print(describe_candidate(candidate))
     target = output_path(args.image)
     if not cv2.imwrite(str(target), annotate(frame, detections)):
         print(f"Cannot write {target}", file=sys.stderr)

@@ -6,7 +6,9 @@ in config.py; docs/spec/operating-modes.md, section 4). LeKiwiClient's sign conv
 target drives forward (+x). Owner request (2026-09-24, the first version oscillated): the speed
 tapers linearly to zero near the target (max_xy * clamp(error / full-speed error, -1, 1)), an axis
 inside its tolerance gets 0, tiny commands become 0, cx and h are smoothed with an exponential
-moving average, and each command changes by at most max_accel * dt per frame. Terminal results
+moving average, and each command changes by at most max_accel * dt per frame. While the egg
+flickers out of detection (fewer than lost_frames consecutive misses) the controller keeps steering
+toward the last smoothed position (robot run 2026-09-24: far eggs flicker). Terminal results
 return zeros at once. Pure and stdlib-only: detections are duck-typed (cx, h).
 """
 
@@ -159,9 +161,10 @@ def align_step(
 ) -> tuple[AlignState, dict[str, float], AlignResult]:
     """One frame of alignment: the next state, the base action, and the result.
 
-    Timeout is checked first, then egg loss (consecutive frames without a detection; the command
-    ramps toward zero meanwhile), then alignment on the smoothed egg (consecutive in-tolerance
-    frames; drifting out resets the count). Terminal results return an idle state and zeros.
+    Timeout is checked first, then egg loss (consecutive frames without a detection; until then the
+    command keeps following the last smoothed position and the in-tolerance count is kept, neither
+    advanced nor reset), then alignment on the smoothed egg (consecutive in-tolerance frames;
+    drifting out resets the count). Terminal results return an idle state and zeros.
     """
     if now - state.started_at > gains.timeout_s:
         return AlignState(), zero_base(), "timeout"
@@ -169,8 +172,11 @@ def align_step(
     if lost >= gains.lost_frames:
         return AlignState(), zero_base(), "lost"
     smoothed = smooth(state.smoothed, det, gains.smoothing)
-    wanted, done = align_command(smoothed if det is not None else None, target, gains)
-    ok_frames = state.ok_frames + 1 if done else 0
+    wanted, done = align_command(smoothed, target, gains)
+    if det is None:
+        ok_frames = state.ok_frames  # a flicker neither advances nor resets the progress
+    else:
+        ok_frames = state.ok_frames + 1 if done else 0
     if ok_frames >= gains.done_frames:
         return AlignState(), zero_base(), "done"
     dt = now - state.updated_at

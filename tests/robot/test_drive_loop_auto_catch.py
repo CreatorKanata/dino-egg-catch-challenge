@@ -128,8 +128,16 @@ class AutoCatchLoopTests(unittest.TestCase):
         self.assertEqual((state.app.action, state.app.notice, state.app.notice_level),
                          ("none", "Egg lost", "warning"))
         self.assertEqual(self.parts.adapter.sent[-1], ZEROS)
-        ramp = [abs(sent["y.vel"]) for sent in self.parts.adapter.sent[-ALIGN_LOST_FRAMES - 1:-1]]
-        self.assertEqual(ramp, sorted(ramp, reverse=True))  # decelerates while the egg is missing
+        misses = [sent["y.vel"] for sent in self.parts.adapter.sent[-ALIGN_LOST_FRAMES - 1:-1]]
+        self.assertTrue(all(y_vel < 0 for y_vel in misses))  # kept steering on the last known egg
+
+    def test_short_flicker_keeps_the_command_sign(self):
+        state = self.start_aligning()
+        for detections in ((), (), (FAR_RIGHT,), ()):
+            self.detector.return_value = detections
+            state = self.run_frame(state)
+            self.assertEqual(state.app.action, "auto_catch")
+            self.assertLess(self.parts.adapter.sent[-1]["y.vel"], 0.0)
 
     def test_trace_rows_go_to_one_file_per_alignment(self):
         state = self.run_frame(self.start_aligning(), "stop")

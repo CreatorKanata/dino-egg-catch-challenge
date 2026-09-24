@@ -109,7 +109,7 @@ src/robot/
     timing.py                # one-time detector timing log; pure
     align_trace.py           # per-frame alignment CSV trace in captures/ (stdlib)
     capture.py               # `c` key: save raw frames + detections to captures/ (lazy OpenCV)
-    inspect.py               # offline CLI: python -m robot.vision.inspect <image.png> [--rgb]
+    inspect.py               # offline CLI: python -m robot.vision.inspect <image.png> [--rgb] [--debug]
   leader_arm.py              # SO100Leader wrapper: read_pose() -> six arm_* keys or None (lazy LeRobot)
   top_camera.py              # OpenCVCamera wrapper for the overhead view
   lekiwi_adapter.py          # LeKiwiClient wrapper: connect + capture arm pose, observe, send base + arm pose, stop

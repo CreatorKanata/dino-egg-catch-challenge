@@ -12,7 +12,7 @@ Thresholds are placeholders in config.py. OpenCV is imported lazily (see __init_
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 from typing import Any
 
@@ -30,14 +30,16 @@ from robot.config import (
     EGG_MIN_SPOT_AREA_PX,
     EGG_MIN_SPOTS,
     EGG_OPEN_KERNEL_PX,
+    EGG_REPAIR_KERNEL_FRACTION,
     EGG_SPOT_HSV,
 )
 from robot.vision.egg_size import EggDetection
 
-__all__ = ("DetectorParams", "EggDetection", "best_egg", "detect_eggs")
+__all__ = ("Candidate", "DetectorParams", "EggDetection", "best_egg", "detect_eggs", "inspect_candidates")
 
 HsvRange = tuple[tuple[int, int, int], tuple[int, int, int]]
 ELLIPSE_MIN_POINTS = 5  # cv2.fitEllipse needs at least five contour points
+REPAIR_KERNEL_MAX_PX = 15  # performance bound for the gap repair (not a tunable)
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,7 @@ class DetectorParams:
     min_spots: int = EGG_MIN_SPOTS
     open_kernel_px: int = EGG_OPEN_KERNEL_PX
     close_kernel_px: int = EGG_CLOSE_KERNEL_PX
+    repair_kernel_fraction: float = EGG_REPAIR_KERNEL_FRACTION
     min_spot_area_px: int = EGG_MIN_SPOT_AREA_PX
     min_solidity: float = EGG_MIN_SOLIDITY
     ellipse_fill_range: tuple[float, float] = EGG_ELLIPSE_FILL_RANGE
@@ -101,68 +104,131 @@ def _spot_blobs(cv2: Any, mask: Any, min_area: int) -> tuple[int, int]:
     return len(kept), sum(kept)
 
 
-def _spots(cv2: Any, inside: Any, crops: Mapping[str, Any], params: DetectorParams) -> tuple[str, int] | None:
-    """(color, total spot blobs) inside the filled contour, or None when there are too few spots."""
-    blobs = {color: _spot_blobs(cv2, ((mask > 0) & inside).astype(np.uint8), params.min_spot_area_px)
-             for color, mask in crops.items()}
-    total = sum(count for count, _ in blobs.values())
-    if total < params.min_spots:
-        return None
-    return max(blobs, key=lambda name: blobs[name][1]), total
+def _spot_pixels(cv2: Any, inside: Any, crops: Mapping[str, Any], params: DetectorParams) -> dict[str, tuple[int, int]]:
+    """Per color: (spot blobs >= min_spot_area_px, their pixels) inside the filled outline."""
+    return {color: _spot_blobs(cv2, ((mask > 0) & inside).astype(np.uint8), params.min_spot_area_px)
+            for color, mask in crops.items()}
 
 
-def _shape_ok(cv2: Any, contour: Any, area: float, touches_border: bool, params: DetectorParams) -> float | None:
-    """The solidity when the outline is egg-shaped, else None.
+@dataclass(frozen=True)
+class Candidate:
+    """One outer contour after open/close, with every measurement and the rule that rejected it
+    (`rejected` is None for an egg). Pixel bbox; solidity and fill are measured after gap repair."""
 
-    Convex (solidity) always; elliptical fill only when the whole outline is visible.
+    x: int
+    y: int
+    w: int
+    h: int
+    area_px: int
+    aspect: float
+    solidity: float
+    fill: float | None
+    touches_border: bool
+    spots: Mapping[str, tuple[int, int]]
+    rejected: str | None
+
+
+def _repaired(cv2: Any, contour: Any, box: tuple[int, int, int, int], params: DetectorParams) -> tuple[Any, Any]:
+    """(repaired outer contour in frame coordinates, its filled mask cropped to `box`).
+
+    The outline is closed with a kernel proportional to the bbox (at least EGG_CLOSE_KERNEL_PX),
+    so bites cut by glare or tarp reflections on the white do not fail the shape test. The close
+    runs on a mask downscaled so the kernel stays near REPAIR_KERNEL_MAX_PX (a full-resolution
+    60 px close cost ~30 ms per frame on a large egg).
     """
-    hull_area = cv2.contourArea(cv2.convexHull(contour))
+    x, y, w, h = box
+    kernel_px = max(params.close_kernel_px, int(params.repair_kernel_fraction * min(w, h)))
+    scale = max(1, math.ceil(kernel_px / REPAIR_KERNEL_MAX_PX))
+    small_kernel = max(3, round(kernel_px / scale)) | 1
+    pad = small_kernel
+    canvas = np.zeros((h // scale + 1 + 2 * pad, w // scale + 1 + 2 * pad), dtype=np.uint8)
+    shifted = ((contour - np.array([x, y])) // scale + pad).astype(np.int32)
+    cv2.drawContours(canvas, [shifted], -1, 255, thickness=-1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (small_kernel, small_kernel))
+    closed = cv2.morphologyEx(canvas, cv2.MORPH_CLOSE, kernel)
+    outlines, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    small = max(outlines, key=cv2.contourArea)
+    outline = ((small - pad) * scale + np.array([x, y])).astype(np.int32)
+    filled = np.zeros((h, w), dtype=np.uint8)
+    cv2.drawContours(filled, [outline], -1, 1, thickness=-1, offset=(-x, -y))
+    return outline, filled > 0
+
+
+def _shape(cv2: Any, outline: Any, touches_border: bool) -> tuple[float, float | None]:
+    """(solidity, ellipse fill) of an outline; fill is None at the border or with < 5 points."""
+    area = cv2.contourArea(outline)
+    hull_area = cv2.contourArea(cv2.convexHull(outline))
     solidity = area / hull_area if hull_area > 0 else 0.0
-    if solidity < params.min_solidity:
-        return None
-    if touches_border:
-        return solidity
-    if len(contour) < ELLIPSE_MIN_POINTS:
-        return None
-    _, (axis_a, axis_b), _ = cv2.fitEllipse(contour)
+    if touches_border or len(outline) < ELLIPSE_MIN_POINTS:
+        return solidity, None
+    _, (axis_a, axis_b), _ = cv2.fitEllipse(outline)
     ellipse_area = math.pi * axis_a * axis_b / 4
-    low, high = params.ellipse_fill_range
-    return solidity if ellipse_area > 0 and low <= area / ellipse_area <= high else None
+    return solidity, (area / ellipse_area if ellipse_area > 0 else 0.0)
 
 
-def _contour_egg(cv2: Any, contour: Any, masks: _Masks, params: DetectorParams) -> EggDetection | None:
-    """The egg for one outer contour, or None when area, aspect, shape, or spots do not fit."""
-    area = cv2.contourArea(contour)
-    x, y, w, h = cv2.boundingRect(contour)
+def _rejection(candidate: Candidate, params: DetectorParams) -> str | None:
     low_aspect, high_aspect = params.aspect_range
-    if area < params.min_area_px or not low_aspect <= w / h <= high_aspect:
-        return None
+    low_fill, high_fill = params.ellipse_fill_range
+    if candidate.area_px < params.min_area_px:
+        return "area"
+    if not low_aspect <= candidate.aspect <= high_aspect:
+        return "aspect"
+    if candidate.solidity < params.min_solidity:
+        return "solidity"
+    if not candidate.touches_border and (candidate.fill is None or not low_fill <= candidate.fill <= high_fill):
+        return "ellipse fill"
+    if sum(count for count, _ in candidate.spots.values()) < params.min_spots:
+        return "spots"
+    return None
+
+
+def _candidate(cv2: Any, contour: Any, masks: _Masks, params: DetectorParams) -> Candidate:
+    """Measure one outer contour; cheap rules first, so small clutter skips the repair."""
+    x, y, w, h = cv2.boundingRect(contour)
     height, width = masks.components.shape
     margin = params.border_margin_px
     touches_border = x < margin or y < margin or x + w > width - margin or y + h > height - margin
-    solidity = _shape_ok(cv2, contour, area, touches_border, params)
-    if solidity is None:
-        return None
-    inside = np.zeros((h, w), dtype=np.uint8)
-    cv2.drawContours(inside, [contour], -1, 1, thickness=-1, offset=(-x, -y))
-    spots = _spots(cv2, inside > 0, {color: mask[y:y + h, x:x + w] for color, mask in masks.spots.items()}, params)
-    if spots is None:
-        return None
-    return EggDetection(cx=(x + w / 2) / width, cy=(y + h / 2) / height, w=w / width, h=h / height,
-                        color=spots[0], spots=spots[1], area_px=int(area), touches_border=touches_border,
-                        solidity=solidity)
+    base = Candidate(x, y, w, h, int(cv2.contourArea(contour)), w / h, 0.0, None, touches_border, {}, None)
+    early = _rejection(replace(base, solidity=1.0, fill=1.0, spots={"": (params.min_spots, 0)}), params)
+    if early is not None:
+        return replace(base, rejected=early)
+    outline, inside = _repaired(cv2, contour, (x, y, w, h), params)
+    solidity, fill = _shape(cv2, outline, touches_border)
+    crops = {color: mask[y:y + h, x:x + w] for color, mask in masks.spots.items()}
+    measured = replace(base, solidity=solidity, fill=fill, spots=_spot_pixels(cv2, inside, crops, params))
+    return replace(measured, rejected=_rejection(measured, params))
+
+
+def _as_egg(candidate: Candidate, width: int, height: int) -> EggDetection:
+    total = sum(count for count, _ in candidate.spots.values())
+    color = max(candidate.spots, key=lambda name: candidate.spots[name][1])
+    return EggDetection(cx=(candidate.x + candidate.w / 2) / width, cy=(candidate.y + candidate.h / 2) / height,
+                        w=candidate.w / width, h=candidate.h / height, color=color, spots=total,
+                        area_px=candidate.area_px, touches_border=candidate.touches_border,
+                        solidity=candidate.solidity)
+
+
+def _frame(frame_bgr: Any) -> Any:
+    frame = np.asarray(frame_bgr, dtype=np.uint8)
+    if frame.ndim != 3 or frame.shape[2] != 3 or 0 in frame.shape:
+        raise ValueError(f"Expected an HxWx3 BGR frame, got shape {frame.shape}")
+    return frame
+
+
+def inspect_candidates(frame_bgr: Any, params: DetectorParams = DEFAULT_PARAMS) -> tuple[Candidate, ...]:
+    """Every outer contour after the open/close stage, measured, largest first (for --debug)."""
+    cv2 = _cv2()
+    masks = _masks(cv2, _frame(frame_bgr), params)
+    contours, _ = cv2.findContours(masks.components, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    candidates = (_candidate(cv2, contour, masks, params) for contour in contours)
+    return tuple(sorted(candidates, key=lambda candidate: candidate.area_px, reverse=True))
 
 
 def detect_eggs(frame_bgr: Any, params: DetectorParams = DEFAULT_PARAMS) -> tuple[EggDetection, ...]:
     """All eggs in an HxWx3 uint8 BGR frame, largest (by contour area) first."""
-    cv2 = _cv2()
-    frame = np.asarray(frame_bgr, dtype=np.uint8)
-    if frame.ndim != 3 or frame.shape[2] != 3 or 0 in frame.shape:
-        raise ValueError(f"Expected an HxWx3 BGR frame, got shape {frame.shape}")
-    masks = _masks(cv2, frame, params)
-    contours, _ = cv2.findContours(masks.components, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    eggs = (_contour_egg(cv2, contour, masks, params) for contour in contours)
-    return tuple(sorted((egg for egg in eggs if egg is not None), key=lambda det: det.area_px, reverse=True))
+    height, width = _frame(frame_bgr).shape[:2]
+    return tuple(_as_egg(candidate, width, height) for candidate in inspect_candidates(frame_bgr, params)
+                 if candidate.rejected is None)
 
 
 def best_egg(frame_bgr: Any, params: DetectorParams = DEFAULT_PARAMS) -> EggDetection | None:

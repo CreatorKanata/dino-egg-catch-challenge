@@ -80,6 +80,18 @@ class InspectToolTests(unittest.TestCase):
         self.assertIn("size=ok", output)
         self.assertTrue((self.folder / "front-detected.png").exists())
 
+    def test_debug_lists_candidates_with_verdicts(self):
+        image = self.folder / "front.png"
+        frame = egg_image()
+        cv2.rectangle(frame, (20, 20), (300, 40), (245, 245, 245), -1)
+        cv2.imwrite(str(image), frame)
+        code, output = self.run_tool(image, "--debug")
+        self.assertEqual(code, 0)
+        self.assertIn("candidate(s) after open/close", output)
+        self.assertIn("EGG", output)
+        self.assertIn("rejected: aspect", output)
+        self.assertIn("green=", output)
+
     def test_rgb_flag_swaps_channels_first(self):
         image = self.folder / "screenshot.png"
         cv2.imwrite(str(image), egg_image()[..., ::-1])  # RGB-ordered, like an old screenshot

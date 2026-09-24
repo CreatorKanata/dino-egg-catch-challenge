@@ -189,9 +189,10 @@ RERUN_SESSION_NAME: Final = "dino_drive_mode"
 # --- Auto Catch step 1: front-camera egg detection and base alignment (Phase 2) --------------
 # Placeholders, calibrate at the venue with a capture (`c` in the signboard) and
 # `python -m robot.vision.inspect`. The detector values below were checked against the robot's front
-# captures 20260924-220336 (egg with the pink basket behind it) and 20260924-220404 (same egg, no
-# basket), and against the earlier channel-swapped screenshot; body S <= 50 keeps the white pipe at
-# the left edge out of the egg (S <= 60 already merges them).
+# captures 20260924-220742 (best position), 20260924-220336 (egg with the pink basket behind it),
+# 20260924-220404 (same egg, no basket), and 20260924-222325 (egg farther away, bluish lower half),
+# and against the earlier channel-swapped screenshot; body S <= 50 keeps the white pipe at the left
+# edge out of the egg (S <= 60 already merges them), the gap repair below handles the bluish white.
 # HSV uses OpenCV ranges: H 0-179, S and V 0-255. Each color maps to one or more (low, high) ranges.
 # Body: white incl. the shadowed lower half (V down to 40), but not the blue tarp's highlights (S).
 EGG_BODY_HSV: Final = ((0, 0, 40), (179, 50, 255))
@@ -208,6 +209,11 @@ EGG_ASPECT_RANGE: Final = (0.5, 2.2)  # bbox width / height
 EGG_MIN_SPOTS: Final = 1
 EGG_OPEN_KERNEL_PX: Final = 9  # removes thin clutter (lines, tarp sparkles) before components form
 EGG_CLOSE_KERNEL_PX: Final = 15
+# Shape test runs on the outline closed with max(EGG_CLOSE_KERNEL_PX, fraction * min(w, h)) px, so
+# bites from glare or bluish tarp reflections on the white (capture 20260924-222325) do not fail it.
+# 0.14-0.24 gave one egg on every check capture; 0.12 missed the far egg, 0.26 accepted a false
+# egg at the left edge of 20260924-222325.
+EGG_REPAIR_KERNEL_FRACTION: Final = 0.20
 EGG_MIN_SPOT_AREA_PX: Final = 40
 EGG_MIN_SOLIDITY: Final = 0.85  # contour area / convex hull area: an egg outline is convex
 # Contour area / fitted-ellipse area; only for components clear of the frame border (a partly
@@ -243,7 +249,7 @@ ALIGN_SMOOTHING: Final = 0.5
 ALIGN_MAX_ACCEL: Final = 0.15  # m/s^2
 ALIGN_DONE_FRAMES: Final = 10  # consecutive in-tolerance frames -> aligned
 ALIGN_TIMEOUT_S: Final = 15.0
-ALIGN_LOST_FRAMES: Final = 15  # consecutive frames without an egg -> "Egg lost"
+ALIGN_LOST_FRAMES: Final = 30  # consecutive frames without an egg (1 s) -> "Egg lost"; steers on meanwhile
 DETECT_TIMING_FRAMES: Final = 30  # detector time is averaged over this many frames and logged once
 # Reference captures (`c` key in the signboard); the directory is git-ignored.
 CAPTURE_DIR: Final = "captures"

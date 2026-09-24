@@ -4,7 +4,9 @@ Frames are drawn with cv2.ellipse/cv2.circle (640x480, brown background): a whit
 green, blue, or red spots (red on both hue ends) must yield one detection of that color with a
 bbox close to the drawn ellipse; spotless or too-small eggs and a plain background yield none;
 two eggs come back largest first; an egg in front of a pink basket-colored blob stays one green
-egg; a non-convex white L is rejected; an egg cut by the frame border is still found. Runs in
+egg; a non-convex white L is rejected; an egg cut by the frame border is still found; an egg with
+notches cut into its lower half passes thanks to the gap repair; every candidate reports the rule
+that rejected it. Runs in
 its own interpreter (see tests/robot/test_vision_suite.py) because OpenCV and pygame must not
 share a process on macOS.
 """
@@ -14,7 +16,7 @@ import unittest
 import cv2
 import numpy as np
 
-from robot.vision.egg_detector import DetectorParams, EggDetection, best_egg, detect_eggs
+from robot.vision.egg_detector import DetectorParams, EggDetection, best_egg, detect_eggs, inspect_candidates
 
 WIDTH, HEIGHT = 640, 480
 BROWN = (40, 70, 110)  # BGR: H ~13, S ~160 -> neither white body nor any spot color
@@ -141,6 +143,25 @@ class DetectEggsTests(unittest.TestCase):
         det = detect_eggs(draw_egg(background(), (320, 240), (100, 130), "green"))[0]
         self.assertGreater(det.solidity, 0.95)
         self.assertLessEqual(det.solidity, 1.0)
+
+    def test_gap_repair_accepts_a_notched_egg(self):
+        frame = draw_egg(background(), (320, 240), (110, 90), "green")
+        for dx in (-70, -35, 0, 35, 70):  # dark notches, like tarp reflections cutting the white
+            cv2.line(frame, (320 + dx, 260), (320 + int(dx * 1.4), 360), BROWN, 22)
+        without = inspect_candidates(frame, DetectorParams(repair_kernel_fraction=0.0))[0]
+        self.assertEqual(without.rejected, "solidity")
+        self.assertEqual([det.color for det in detect_eggs(frame)], ["green"])
+
+    def test_candidates_report_rejection_reasons(self):
+        frame = draw_egg(background(), (200, 240), (90, 110), "green")
+        cv2.rectangle(frame, (400, 100), (620, 130), WHITE, -1)  # long bar: aspect
+        cv2.circle(frame, (360, 420), 10, WHITE, -1)  # tiny blob: area
+        cv2.ellipse(frame, (520, 300), (50, 60), 0, 0, 360, WHITE, -1)  # no spots
+        reasons = sorted(str(candidate.rejected) for candidate in inspect_candidates(frame))
+        self.assertEqual(reasons, ["None", "area", "aspect", "spots"])
+        egg = inspect_candidates(frame)[0]
+        self.assertEqual((egg.rejected, egg.spots["green"][0]), (None, 3))
+        self.assertGreater(egg.fill, 0.9)
 
     def test_rejects_non_color_frames(self):
         with self.assertRaises(ValueError):
