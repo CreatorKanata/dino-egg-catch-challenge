@@ -3,8 +3,10 @@
 Frames are drawn with cv2.ellipse/cv2.circle (640x480, brown background): a white ellipse with
 green, blue, or red spots (red on both hue ends) must yield one detection of that color with a
 bbox close to the drawn ellipse; spotless or too-small eggs and a plain background yield none;
-two eggs come back largest first. Runs in its own interpreter (see tests/robot/test_vision_suite.py)
-because OpenCV and pygame must not share a process on macOS.
+two eggs come back largest first; an egg in front of a pink basket-colored blob stays one green
+egg; a non-convex white L is rejected; an egg cut by the frame border is still found. Runs in
+its own interpreter (see tests/robot/test_vision_suite.py) because OpenCV and pygame must not
+share a process on macOS.
 """
 
 import unittest
@@ -17,6 +19,7 @@ from robot.vision.egg_detector import DetectorParams, EggDetection, best_egg, de
 WIDTH, HEIGHT = 640, 480
 BROWN = (40, 70, 110)  # BGR: H ~13, S ~160 -> neither white body nor any spot color
 WHITE = (245, 245, 245)
+PINK = (110, 80, 150)  # BGR: H ~167, S ~119, V 150 -> inside BASKET_HSV
 SPOT_BGR = {"green": (40, 160, 60), "blue": (200, 60, 30), "red_low": (40, 40, 220), "red_high": (90, 30, 220)}
 TOLERANCE_PX = 4
 
@@ -92,6 +95,52 @@ class DetectEggsTests(unittest.TestCase):
     def test_min_spots_parameter(self):
         frame = draw_egg(background(), (320, 240), (100, 130), "green")
         self.assertEqual(detect_eggs(frame, DetectorParams(min_spots=4)), ())
+
+    def test_egg_in_front_of_pink_basket_is_one_green_egg(self):
+        frame = background()
+        cv2.rectangle(frame, (250, 60), (639, 330), PINK, -1)  # basket behind and right of the egg
+        center, axes = (260, 250), (110, 120)
+        detections = detect_eggs(draw_egg(frame, center, axes, "green"))
+        self.assertEqual([det.color for det in detections], ["green"])
+        self.assert_box(detections[0], center, axes)
+        self.assertFalse(detections[0].touches_border)
+
+    def test_pink_blob_alone_is_not_an_egg(self):
+        frame = background()
+        cv2.ellipse(frame, (320, 240), (120, 150), 0, 0, 360, PINK, -1)
+        self.assertEqual(detect_eggs(frame), ())
+
+    def test_non_convex_white_l_is_rejected(self):
+        frame = background()
+        cv2.rectangle(frame, (100, 100), (300, 160), WHITE, -1)
+        cv2.rectangle(frame, (100, 100), (160, 380), WHITE, -1)
+        for center in ((130, 250), (130, 330), (230, 130)):
+            cv2.circle(frame, center, 18, SPOT_BGR["green"], -1)
+        self.assertEqual(detect_eggs(frame), ())
+
+    def test_egg_cut_by_the_frame_border_is_found(self):
+        frame = background()
+        cv2.ellipse(frame, (40, 240), (100, 130), 0, 0, 360, WHITE, -1)
+        for center in ((70, 190), (90, 300), (25, 250)):
+            cv2.circle(frame, center, 18, SPOT_BGR["green"], -1)
+        detections = detect_eggs(frame)
+        self.assertEqual(len(detections), 1)
+        det = detections[0]
+        self.assertEqual((det.color, det.touches_border), ("green", True))
+        self.assertLessEqual(abs(det.w * WIDTH - 141), TOLERANCE_PX)  # visible part: x 0..140
+        self.assertGreater(det.solidity, 0.95)
+
+    def test_ellipse_fill_applies_only_away_from_the_border(self):
+        strict = DetectorParams(ellipse_fill_range=(2.0, 3.0))  # no real outline can pass
+        inside = draw_egg(background(), (320, 240), (100, 130), "green")
+        self.assertEqual(detect_eggs(inside, strict), ())
+        cut = draw_egg(background(), (60, 240), (100, 130), "green")
+        self.assertEqual([det.touches_border for det in detect_eggs(cut, strict)], [True])
+
+    def test_solidity_is_recorded(self):
+        det = detect_eggs(draw_egg(background(), (320, 240), (100, 130), "green"))[0]
+        self.assertGreater(det.solidity, 0.95)
+        self.assertLessEqual(det.solidity, 1.0)
 
     def test_rejects_non_color_frames(self):
         with self.assertRaises(ValueError):

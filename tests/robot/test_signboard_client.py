@@ -131,7 +131,7 @@ class IsolationTests(unittest.TestCase):
         result = run_isolated(
             "import sys\n"
             "import robot.align, robot.mode_manager, robot.manual_mode, robot.display_status\n"
-            "import robot.vision.egg_size, robot.vision.timing\n"
+            "import robot.vision.egg_size, robot.vision.timing, robot.vision.align_trace\n"
             "loaded = [name for name in ('cv2', 'numpy', 'pygame', 'lerobot') if name in sys.modules]\n"
             "assert not loaded, loaded\n"
         )

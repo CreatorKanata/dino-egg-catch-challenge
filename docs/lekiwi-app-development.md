@@ -98,15 +98,16 @@ src/robot/
   drive_state.py             # frozen DriveState and the stop/drive decision; pure
   kachi_phrases.py           # typed text -> KachiButton commands (exact phrases, 1 s gap); pure
   mode_manager.py            # frozen AppState and the Stop / mode toggle / Hi! / Thx rules, Auto Catch start/finish; pure
-  align.py                   # image-based base alignment controller for Auto Catch; pure
+  align.py                   # Auto Catch base alignment: tapered speed, smoothing, rate limit; pure
   arm_follow.py              # slow engagement toward the leader pose, then following; pure
   manual_mode.py             # per-frame composition: commands, alignment, base action, arm pose, arm status; pure
   display_status.py          # frozen DisplayStatus and overlays (target guide, egg) sent to the signboard; pure
   vision/
     egg_size.py              # EggDetection record and the size precondition; pure
-    egg_detector.py          # HSV color egg detector on the front frame (numpy + lazy OpenCV)
+    egg_detector.py          # HSV color + shape egg detector on the front frame, basket excluded (numpy + lazy OpenCV)
     frames.py                # Pi front/wrist frames RGB -> BGR right after observe() (numpy)
     timing.py                # one-time detector timing log; pure
+    align_trace.py           # per-frame alignment CSV trace in captures/ (stdlib)
     capture.py               # `c` key: save raw frames + detections to captures/ (lazy OpenCV)
     inspect.py               # offline CLI: python -m robot.vision.inspect <image.png> [--rgb]
   leader_arm.py              # SO100Leader wrapper: read_pose() -> six arm_* keys or None (lazy LeRobot)
@@ -126,6 +127,7 @@ tests/robot/
   test_kachi_phrases.py
   test_mode_manager.py
   test_align.py
+  test_align_trace.py
   test_egg_size.py
   test_frames.py
   test_detect_timing.py

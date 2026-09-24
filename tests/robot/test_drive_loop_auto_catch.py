@@ -2,8 +2,10 @@
 
 Uses the fake devices in loop_fakes.py with the egg detector patched to return chosen
 detections, so the Hi! precondition alerts, the alignment driving the base (controller and
-leader ignored, input loss not stopping it), its done / lost results, Stop cancelling it, and
-the capture command are verified without hardware or OpenCV. Skipped when LeRobot is unavailable.
+leader ignored, input loss not stopping it), its done / lost results, Stop cancelling it, the
+capture command, and the alignment trace rows are verified without hardware or OpenCV. A fake
+monotonic clock advances one loop period per frame, so the rate-limited ramp is predictable.
+Skipped when LeRobot is unavailable.
 """
 
 from dataclasses import replace
@@ -19,10 +21,17 @@ except ImportError:  # pragma: no cover - depends on the environment
     DriveDevices = None
 
 from loop_fakes import DRIVING, FORWARD, FRONT_BGR, HOLD, NEAR, ZEROS, FakeAdapter, FakeLeader, FakeReader, FakeView
-from robot.config import ALIGN_DONE_FRAMES, ALIGN_LOST_FRAMES, ALIGN_TARGET_CX, ALIGN_TARGET_H
+from robot.config import (
+    ALIGN_DONE_FRAMES,
+    ALIGN_LOST_FRAMES,
+    ALIGN_MAX_ACCEL,
+    ALIGN_TARGET_CX,
+    ALIGN_TARGET_H,
+    LOOP_HZ,
+)
 from robot.vision.egg_size import EggDetection
 
-FAR_RIGHT = EggDetection(cx=0.8, cy=0.5, w=0.4, h=0.55, color="green", spots=3, area_px=20000)
+FAR_RIGHT = EggDetection(cx=0.8, cy=0.5, w=0.4, h=0.4, color="green", spots=3, area_px=20000)
 ON_TARGET = replace(FAR_RIGHT, cx=ALIGN_TARGET_CX, h=ALIGN_TARGET_H)
 TINY = replace(FAR_RIGHT, h=0.05)
 
@@ -34,15 +43,26 @@ class AutoCatchLoopTests(unittest.TestCase):
         patcher = mock.patch.object(drive_loop, "detect_eggs", return_value=(FAR_RIGHT,))
         self.detector = patcher.start()
         self.addCleanup(patcher.stop)
+        trace = mock.patch.object(drive_loop, "append_row")  # never write captures/ in tests
+        self.trace = trace.start()
+        self.addCleanup(trace.stop)
+        self.clock = 100.0
+        clock = mock.patch.object(drive_loop.time, "monotonic", side_effect=self.tick)
+        clock.start()
+        self.addCleanup(clock.stop)
         self.leader = FakeLeader(NEAR)
         self.view = FakeView(keep_running=True)
         self.reader = FakeReader(FORWARD)
         self.parts = DriveDevices(reader=self.reader, adapter=FakeAdapter(), camera=None, view=self.view,
                                   use_rerun=False, leader=self.leader)
 
+    def tick(self):
+        self.clock += 1 / LOOP_HZ
+        return self.clock
+
     def run_frame(self, state, *commands):
         self.view.commands = commands
-        state, keep_running, _ = step(self.parts, state, 0.0)
+        state, keep_running, _ = step(self.parts, state, self.clock)
         self.assertTrue(keep_running)
         return state
 
@@ -51,7 +71,8 @@ class AutoCatchLoopTests(unittest.TestCase):
         reads = self.leader.reads
         state = self.run_frame(state, "hi")
         self.assertEqual(self.leader.reads, reads)  # leader ignored from the Hi! frame on
-        return state
+        self.assertEqual(self.parts.adapter.sent[-1], ZEROS)  # start frame: dt = 0, no motion yet
+        return self.run_frame(state)
 
     def test_rejected_hi_shows_warning_and_keeps_driving(self):
         for detections, notice in (((), "No egg in view"), ((TINY,), "Egg too far")):
@@ -69,7 +90,7 @@ class AutoCatchLoopTests(unittest.TestCase):
         self.assertEqual(state.app.action, "auto_catch")
         self.assertLess(sent["y.vel"], 0.0)  # egg right of target -> move right
         self.assertGreater(sent["x.vel"], 0.0)  # egg smaller than target -> forward
-        self.assertLess(sent["x.vel"], 0.1)  # proportional, not the joystick's 0.1 m/s
+        self.assertAlmostEqual(sent["x.vel"], ALIGN_MAX_ACCEL / LOOP_HZ)  # ramping up, not the joystick
         self.assertEqual((state.arm_status, self.parts.adapter.arms[-1]), ("holding", NEAR))  # last pose held
         status = self.view.rendered[-1][2]
         self.assertEqual((status.action, [overlay.kind for overlay in status.overlays]),
@@ -87,9 +108,10 @@ class AutoCatchLoopTests(unittest.TestCase):
         state = self.start_aligning()
         self.detector.return_value = (ON_TARGET,)
         self.leader.pose = {key: 90.0 for key in HOLD}  # moved during the alignment
-        state = self.run_frame(state)  # the loop uses the previous frame's egg: one more frame
-        for _ in range(ALIGN_DONE_FRAMES):
+        for _ in range(ALIGN_DONE_FRAMES + 10):  # smoothing converges first, then N frames in tolerance
             state = self.run_frame(state)
+            if state.app.action == "none":
+                break
         self.assertEqual((state.app.action, state.app.notice), ("none", "Aligned. Catch: not available yet"))
         self.assertEqual(self.parts.adapter.sent[-1], ZEROS)
         self.assertEqual((state.follow.engaged, state.arm_status), (False, "syncing"))  # slow approach
@@ -98,12 +120,32 @@ class AutoCatchLoopTests(unittest.TestCase):
 
     def test_egg_lost(self):
         state = self.start_aligning()
+        for _ in range(5):
+            state = self.run_frame(state)  # build up some speed
         self.detector.return_value = ()
         for _ in range(ALIGN_LOST_FRAMES + 1):
             state = self.run_frame(state)
         self.assertEqual((state.app.action, state.app.notice, state.app.notice_level),
                          ("none", "Egg lost", "warning"))
-        self.assertEqual(self.parts.adapter.sent[-2], ZEROS)
+        self.assertEqual(self.parts.adapter.sent[-1], ZEROS)
+        ramp = [abs(sent["y.vel"]) for sent in self.parts.adapter.sent[-ALIGN_LOST_FRAMES - 1:-1]]
+        self.assertEqual(ramp, sorted(ramp, reverse=True))  # decelerates while the egg is missing
+
+    def test_trace_rows_go_to_one_file_per_alignment(self):
+        state = self.run_frame(self.start_aligning(), "stop")
+        paths = {call.args[0] for call in self.trace.call_args_list}
+        self.assertEqual(len(paths), 1)
+        self.assertTrue(str(paths.pop()).endswith("-align.csv"))
+        self.assertEqual(self.trace.call_count, 2)  # start frame + one running frame; Stop ends it
+        self.assertIsNone(state.align_trace)
+
+    def test_trace_write_failure_does_not_stop_alignment(self):
+        self.trace.side_effect = OSError("read-only")
+        with self.assertLogs("robot.drive_loop", level="ERROR") as logs:
+            state = self.start_aligning()
+            state = self.run_frame(state)
+        self.assertEqual((state.app.action, state.align_trace), ("auto_catch", ""))
+        self.assertEqual(len(logs.output), 1)  # logged once, then tracing is off for this run
 
     def test_stop_cancels_alignment(self):
         state = self.run_frame(self.start_aligning(), "stop")

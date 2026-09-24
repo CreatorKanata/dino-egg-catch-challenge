@@ -17,7 +17,8 @@ SIZE_CLASSES: Final = ("none", "too_small", "too_large", "ok")
 
 @dataclass(frozen=True)
 class EggDetection:
-    """One egg: bbox center and size normalized to the frame (0..1), spot color, spot count, area."""
+    """One egg: bbox center and size normalized to the frame (0..1), spot color, spot count, area,
+    whether the bbox touches the frame border (partly visible egg), and the outline's solidity."""
 
     cx: float
     cy: float
@@ -26,6 +27,8 @@ class EggDetection:
     color: str
     spots: int
     area_px: int
+    touches_border: bool = False
+    solidity: float = 1.0
 
 
 class HasHeight(Protocol):

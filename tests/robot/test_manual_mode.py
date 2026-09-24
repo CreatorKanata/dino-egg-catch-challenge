@@ -58,11 +58,11 @@ class FoldCommandsTests(unittest.TestCase):
 class StepAutoCatchTests(unittest.TestCase):
     def test_no_action_passes_through(self):
         result = CommandResult(app=AppState(), stop_base=False, disengage_arm=False)
-        self.assertEqual(step_auto_catch(result, FAR_EGG, 1.0), (result, None))
+        self.assertEqual(step_auto_catch(result, FAR_EGG, 1.0), (result, None, None))
 
     def test_running_alignment_commands_the_base(self):
-        result, base = step_auto_catch(CommandResult(ALIGNING, False, False), FAR_EGG, 1.0)
-        self.assertEqual(result.app.action, "auto_catch")
+        result, base, row = step_auto_catch(CommandResult(ALIGNING, False, False), FAR_EGG, 1.0)
+        self.assertEqual((result.app.action, row.result, row.cx_raw), ("auto_catch", "running", FAR_EGG.cx))
         self.assertLess(base["y.vel"], 0.0)  # egg right of target -> move right
         self.assertGreater(base["x.vel"], 0.0)  # egg smaller than target -> forward
         self.assertFalse(result.stop_base or result.disengage_arm)
@@ -70,11 +70,12 @@ class StepAutoCatchTests(unittest.TestCase):
     def test_terminal_result_ends_the_action_with_zeros(self):
         on_target = replace(FAR_EGG, cx=ALIGN_TARGET_CX, h=ALIGN_TARGET_H)
         almost = replace(ALIGNING, align=AlignState("aligning", 0.0, ok_frames=100, lost_frames=0))
-        result, base = step_auto_catch(CommandResult(almost, False, False), on_target, 1.0)
+        result, base, row = step_auto_catch(CommandResult(almost, False, False), on_target, 1.0)
+        self.assertEqual(row.result, "done")
         self.assertEqual((result.app.action, result.app.notice), ("none", "Aligned. Catch: not available yet"))
         self.assertTrue(result.stop_base and result.disengage_arm)
         self.assertEqual(base, ZEROS)
-        timed_out, base = step_auto_catch(CommandResult(ALIGNING, False, False), FAR_EGG, 1000.0)
+        timed_out, base, _ = step_auto_catch(CommandResult(ALIGNING, False, False), FAR_EGG, 1000.0)
         self.assertEqual((timed_out.app.notice, timed_out.app.notice_level, base),
                          ("Could not align", "warning", ZEROS))
 

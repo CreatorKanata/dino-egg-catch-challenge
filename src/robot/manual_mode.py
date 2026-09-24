@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 import logging
 
-from robot.align import align_step
+from robot.align import TraceRow, align_step, trace_row
 from robot.arm_follow import ArmFollowState, disengaged, follow_step
 from robot.config import LEFT_RIGHT_ROLE, SPEED_LEVELS
 from robot.controller_to_action import stop_action
@@ -45,6 +45,7 @@ class LoopState:
     arm_status: ArmStatus = "holding"
     egg: EggDetection | None = None  # best egg in the latest front frame (Manual Mode only)
     timing: DetectTiming = DetectTiming()
+    align_trace: str | None = None  # CSV trace path of the running alignment
 
 
 @dataclass(frozen=True)
@@ -79,21 +80,23 @@ def fold_commands(app: AppState, commands: Iterable[str], now: float, egg_size: 
 
 def step_auto_catch(
     result: CommandResult, egg: EggDetection | None, now: float
-) -> tuple[CommandResult, dict[str, float] | None]:
-    """Advance a running alignment on this frame's egg; (result, None) when no action runs.
+) -> tuple[CommandResult, dict[str, float] | None, TraceRow | None]:
+    """Advance a running alignment on this frame's egg; (result, None, None) when no action runs.
 
-    The returned base action replaces controller driving. A terminal alignment result ends the
-    action (finish_auto_catch): zero velocities this frame and arm following disengaged.
+    The returned base action replaces controller driving; the trace row describes the frame. A
+    terminal alignment result ends the action (finish_auto_catch): zero velocities this frame and
+    arm following disengaged.
     """
     app = result.app
     if app.action != "auto_catch":
-        return result, None
+        return result, None, None
     align, base, outcome = align_step(app.align, egg, now)
+    row = trace_row(app.align, egg, now, base, outcome)
     if outcome == "running":
-        return replace(result, app=replace(app, align=align)), base
+        return replace(result, app=replace(app, align=align)), base, row
     finished = finish_auto_catch(app, outcome, now)
     return CommandResult(app=finished.state, stop_base=result.stop_base or finished.stop_base,
-                         disengage_arm=True), base
+                         disengage_arm=True), base, row
 
 
 def leader_wanted(app: AppState, has_leader: bool) -> bool:

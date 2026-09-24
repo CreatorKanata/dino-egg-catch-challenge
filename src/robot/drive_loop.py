@@ -14,6 +14,7 @@ LeRobot helpers used here and inside robot.vision), so its unit tests stay free 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 import logging
+from pathlib import Path
 import time
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -33,6 +34,7 @@ from robot.display_status import DisplayStatus, display_status, front_overlays
 from robot.drive_state import DriveState, update_drive_state
 from robot.leader_arm import LeaderArm
 from robot.lekiwi_adapter import LeKiwiAdapter
+from robot.align import TraceRow
 from robot.manual_mode import (
     LoopState,
     fold_commands,
@@ -43,6 +45,7 @@ from robot.manual_mode import (
     step_auto_catch,
 )
 from robot.mode_manager import NOTICE_CAPTURE_FAILED, NOTICE_CAPTURED, with_notice
+from robot.vision.align_trace import append_row, trace_path
 from robot.vision.capture import save_capture
 from robot.vision.egg_detector import detect_eggs
 from robot.vision.egg_size import EggDetection, classify_size
@@ -123,7 +126,7 @@ def _next_state(
     stale = devices.reader.is_stale(now)
     commands = devices.view.poll_commands() if devices.view is not None else ()
     folded = fold_commands(state.app, commands, now, classify_size(state.egg))
-    folded, auto_base = step_auto_catch(folded, state.egg, now)
+    folded, auto_base, trace = step_auto_catch(folded, state.egg, now)
     follow = disengaged() if folded.disengage_arm else state.follow
     drive = update_drive_state(state.drive, controller, encoder_delta, stale, dt)
     has_leader = devices.leader is not None
@@ -131,10 +134,32 @@ def _next_state(
     arm_cmd, follow, arm_status = plan_arm(devices.adapter.arm_hold, leader_pose, follow, folded.app, has_leader, dt)
     drive, base = plan_base(drive, controller, folded.app, folded.stop_base, auto_base)
     devices.adapter.send_action(base, arm_cmd)
-    next_state = replace(state, drive=drive, app=folded.app, follow=follow, arm_status=arm_status)
+    next_state = replace(state, drive=drive, app=folded.app, follow=follow, arm_status=arm_status,
+                         align_trace=record_trace(state.align_trace, trace, folded.app.action == "auto_catch"))
     log_transitions(state.drive, drive)
     log_changes(state, next_state)
     return next_state, controller, {**arm_cmd, **base}, tuple(commands)
+
+
+def record_trace(path: str | None, row: TraceRow | None, running: bool) -> str | None:
+    """Append this frame's alignment row (a new file per alignment); log the path when it ends.
+
+    A failed write is logged once per alignment and never stops the loop.
+    """
+    if row is None:
+        return None
+    target = str(trace_path()) if path is None else path  # "" = tracing off after a failure
+    if target:
+        try:
+            append_row(Path(target), row)
+        except OSError:
+            logger.exception("Alignment trace could not be written; tracing off for this alignment")
+            target = ""
+    if running:
+        return target
+    if target:
+        logger.info("Alignment trace: %s", target)
+    return None
 
 
 def detect_front(state: LoopState, frames: Mapping[str, Any]) -> tuple[LoopState, tuple[EggDetection, ...]]:

@@ -39,7 +39,8 @@ def output_path(image: Path) -> Path:
 
 def describe(index: int, det: EggDetection) -> str:
     return (f"{index}: {det.color} egg  cx={det.cx:.3f} cy={det.cy:.3f} w={det.w:.3f} h={det.h:.3f}  "
-            f"spots={det.spots} area={det.area_px}px  size={classify_size(det)}")
+            f"spots={det.spots} area={det.area_px}px solidity={det.solidity:.3f} "
+            f"border={'yes' if det.touches_border else 'no'}  size={classify_size(det)}")
 
 
 def _box(frame: Any, cx: float, cy: float, w: float, h: float) -> tuple[tuple[int, int], tuple[int, int]]:
