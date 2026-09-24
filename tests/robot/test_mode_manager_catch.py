@@ -73,7 +73,9 @@ class RunningTests(unittest.TestCase):
     def test_outcome_notices(self):
         terminal = (("done", "Ready", "info"), ("lost", "Egg lost", "warning"),
                     ("align_timeout", "Could not align", "warning"),
-                    ("release_timeout", "Arm did not reach the release pose", "warning"))
+                    ("release_timeout", "Arm did not reach the release pose", "warning"),
+                    ("catch_timeout_returned", "Arm did not reach the catch pose", "warning"),
+                    ("no_wrist_egg_returned", "Egg not in wrist view", "warning"))
         for outcome, notice, level in terminal:
             with self.subTest(outcome=outcome):
                 ended = catch_notice(RUNNING, outcome, 3.0)

@@ -17,6 +17,7 @@ from typing import Final, Literal
 from robot.align import AlignGains, AlignState, AlignTarget, align_step, start_align, zero_base
 from robot.arm_follow import approach_pose, within
 from robot.config import (
+    ALIGN_FULL_SPEED_ERROR_H,
     ARM_ENGAGE_SPEED_DEG_S,
     ARM_KEYS,
     ARM_ENGAGE_TOLERANCE_DEG,
@@ -40,8 +41,10 @@ ReleaseOutcome = Literal["running", "play_started", "done", "lost", "align_timeo
 GRIPPER_KEY: Final = "arm_gripper.pos"
 JOINT_KEYS: Final = tuple(key for key in ARM_KEYS if key != GRIPPER_KEY)  # every key but the gripper
 # The basket target for the shared alignment controller: bbox width is the size measure.
-RELEASE_TARGET: Final = AlignTarget(cx=RELEASE_TARGET_CX, cy=RELEASE_TARGET_CY, h=RELEASE_TARGET_W, size_attr="w")
-RELEASE_GAINS: Final = AlignGains(tol_cx=RELEASE_TOL_CX, tol_h_far=RELEASE_TOL_W_FAR, tol_h_near=RELEASE_TOL_W_NEAR)
+RELEASE_TARGET: Final = AlignTarget(cx=RELEASE_TARGET_CX, cy=RELEASE_TARGET_CY, h=RELEASE_TARGET_W, size_attr="w",
+                                    larger_is_farther=False)  # a wider basket is closer
+RELEASE_GAINS: Final = AlignGains(full_speed_error_h=ALIGN_FULL_SPEED_ERROR_H, tol_cx=RELEASE_TOL_CX,
+                                  tol_h_far=RELEASE_TOL_W_FAR, tol_h_near=RELEASE_TOL_W_NEAR)
 
 
 @dataclass(frozen=True)

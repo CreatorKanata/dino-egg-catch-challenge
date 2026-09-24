@@ -48,9 +48,12 @@ NOTICE_CATCH: Final = {
     "no_wrist_egg": ("Egg not in wrist view", "warning"),
     "policy_stub": ("Catch: policy not available yet", "info"),
     "release_timeout": ("Arm did not reach the release pose", "warning"),
-    "done": ("Ready", "info"),
+    "done": ("Ready", "info"),  # only after a successful pass (the stub counts as success)
+    "catch_timeout_returned": ("Arm did not reach the catch pose", "warning"),  # shown again once back
+    "no_wrist_egg_returned": ("Egg not in wrist view", "warning"),
 }
-CATCH_TERMINAL: Final = ("lost", "align_timeout", "release_timeout", "done")
+CATCH_TERMINAL: Final = ("lost", "align_timeout", "release_timeout", "done", "catch_timeout_returned",
+                         "no_wrist_egg_returned")
 NOTICE_CAPTURED: Final = "Captured"
 NOTICE_CAPTURE_FAILED: Final = "Capture failed"
 

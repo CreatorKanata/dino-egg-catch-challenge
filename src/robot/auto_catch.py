@@ -5,7 +5,8 @@ moves slowly to the recorded catch pose (head down, the wrist camera sees the eg
 must show the egg, the pick policy runs (a stub in this step: a notice, no motion), and the arm moves
 slowly to the release pose (home_pose.json, head up) with the gripper kept, so a caught egg stays
 held. Phases: align -> to_catch -> wrist_check -> pick_stub -> to_release -> idle. A failed wrist
-check or a catch-pose timeout warns and still returns to the release pose. Modeled on
+check or a catch-pose timeout warns and still returns to the release pose; the warning is shown
+again when the arm is back ("Ready" only after a pass through the stub). Modeled on
 auto_release.py and reusing its gripper key and pose timeout, the shared alignment controller, and
 arm_follow's rate-limited approach. Every frame returns the base action and the arm pose to send;
 the mode manager cancels the action on Stop (the loop then holds the arm and zeroes the base). Pure
@@ -26,9 +27,12 @@ from robot.vision.egg_size import SizeClass
 Pose = Mapping[str, float]
 CatchPhase = Literal["idle", "align", "to_catch", "wrist_check", "pick_stub", "to_release"]
 CATCH_PHASES: Final = ("idle", "align", "to_catch", "wrist_check", "pick_stub", "to_release")
-# Terminal: lost, align_timeout, release_timeout, done. The others only show a notice.
+# Terminal: lost, align_timeout, release_timeout, done, and the two *_returned (back at the release
+# pose after a failure). The others only show a notice.
+CatchFailure = Literal["", "catch_timeout", "no_wrist_egg"]
 CatchOutcome = Literal["running", "lost", "align_timeout", "catch_timeout", "no_wrist_egg", "policy_stub",
-                       "release_timeout", "done"]
+                       "release_timeout", "done", "catch_timeout_returned", "no_wrist_egg_returned"]
+RETURNED: Final = {"catch_timeout": "catch_timeout_returned", "no_wrist_egg": "no_wrist_egg_returned"}
 
 
 @dataclass(frozen=True)
@@ -57,7 +61,8 @@ class CatchRequest:
 @dataclass(frozen=True)
 class CatchState:
     """Phase and its start time, the alignment, the two poses, the wrist-check frame count and
-    whether an egg was seen in any of them, and the time of the last step."""
+    whether an egg was seen in any of them, the time of the last step, and the failure that sent the
+    arm back to the release pose ("" on the success path)."""
 
     phase: CatchPhase = "idle"
     started_at: float = 0.0
@@ -67,6 +72,7 @@ class CatchState:
     checked_frames: int = 0
     egg_seen: bool = False
     updated_at: float = 0.0
+    failure: CatchFailure = ""
 
 
 @dataclass(frozen=True)
@@ -112,7 +118,8 @@ def _align(state: CatchState, egg: object | None, commanded: Pose, now: float) -
 def _to_catch(state: CatchState, commanded: Pose, now: float, dt: float, limits: CatchLimits) -> CatchStep:
     """Toward the full catch pose, the gripper included (the mouth opens as recorded)."""
     if now - state.started_at > limits.pose_timeout_s:
-        return _hold(_next_phase(state, "to_release", now), commanded, "catch_timeout")
+        return _hold(_next_phase(replace(state, failure="catch_timeout"), "to_release", now), commanded,
+                     "catch_timeout")
     target = dict(state.catch or {})
     moved = approach_pose(commanded, target, dt, limits.approach_speed)
     if within(moved, target, limits.tolerance):
@@ -129,7 +136,8 @@ def _wrist_check(state: CatchState, wrist: object | None, commanded: Pose, now: 
     if checked < limits.wrist_check_frames:
         return _hold(replace(state, checked_frames=checked, egg_seen=seen, updated_at=now), commanded)
     if limits.wrist_check_enabled and not seen:
-        return _hold(_next_phase(state, "to_release", now), commanded, "no_wrist_egg")
+        return _hold(_next_phase(replace(state, failure="no_wrist_egg"), "to_release", now), commanded,
+                     "no_wrist_egg")
     return _hold(_next_phase(state, "pick_stub", now), commanded)
 
 
@@ -140,7 +148,7 @@ def _to_release(state: CatchState, commanded: Pose, now: float, dt: float, limit
     target = {**dict(state.home or {}), GRIPPER_KEY: float(commanded[GRIPPER_KEY])}
     moved = approach_pose(commanded, target, dt, limits.approach_speed)
     if within(moved, target, limits.tolerance):
-        return _terminal("done", moved)
+        return _terminal(RETURNED[state.failure] if state.failure else "done", moved)
     return CatchStep(replace(state, updated_at=now), zero_base(), moved, "running")
 
 

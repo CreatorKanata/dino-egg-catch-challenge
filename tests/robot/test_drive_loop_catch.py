@@ -114,7 +114,8 @@ class CatchLoopTests(unittest.TestCase):
         notices = [notice for _, notice, _ in frames]
         self.assertIn("Egg not in wrist view", notices)
         self.assertNotIn("Catch: policy not available yet", notices)
-        self.assertEqual(state.app.notice, "Ready")
+        self.assertNotIn("Ready", notices)  # the warning survives the return to the release pose
+        self.assertEqual((state.app.notice, state.app.notice_level), ("Egg not in wrist view", "warning"))
         self.assertEqual(self.egg_in_wrist_view.call_count, ENABLED.wrist_check_frames)  # only during the check
         self.assert_near(self.parts.adapter.arms[-1], HOLD, [key for key in ARM_KEYS if key != GRIPPER])
 

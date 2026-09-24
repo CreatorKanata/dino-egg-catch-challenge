@@ -37,6 +37,12 @@ class EggDetection:
     # view (the signboard letterbox). None when no ellipse could be fitted.
     ellipse: tuple[float, float, float, float, float] | None = None
 
+    @property
+    def top(self) -> float:
+        """Normalized top edge of the bbox (cy - h/2): the alignment's distance measure, stable under
+        changing light, unlike h, whose shadowed lower end merges with the tarp."""
+        return self.cy - self.h / 2
+
 
 @dataclass(frozen=True)
 class WristView:

@@ -4,7 +4,8 @@ auto_catch.py is pure, so the phase sequence align -> to_catch -> wrist_check ->
 to_release with fake egg and wrist detections and a fake clock, the gripper following the catch
 pose in `to_catch` and held in `to_release`, the per-frame rate limit, the zero base outside
 `align`, the wrist check (disabled, enabled with and without an egg), and every terminal outcome
-(lost, alignment timeout, pose timeouts, done) are verified directly. Stop cancellation is a
+(lost, alignment timeout, pose timeouts, done, and the failure outcomes that repeat their warning
+once the arm is back instead of "done") are verified directly. Stop cancellation is a
 mode-manager rule (test_mode_manager_catch.py).
 """
 
@@ -14,7 +15,7 @@ import unittest
 from robot.align import zero_base
 from robot.auto_catch import CATCH_PHASES, CatchLimits, CatchState, catch_step, start_catch
 from robot.auto_release import GRIPPER_KEY
-from robot.config import ALIGN_DONE_FRAMES, ALIGN_LOST_FRAMES, ALIGN_TARGET_CX, ALIGN_TARGET_H, ALIGN_TIMEOUT_S
+from robot.config import ALIGN_DONE_FRAMES, ALIGN_LOST_FRAMES, ALIGN_TARGET_CX, ALIGN_TARGET_TOP, ALIGN_TIMEOUT_S
 from robot.config import ARM_KEYS, LOOP_HZ
 
 FRAME = 1 / LOOP_HZ
@@ -30,10 +31,11 @@ HOME = {**{key: 0.0 for key in ARM_KEYS}, GRIPPER_KEY: 50.0}  # the release pose
 class Egg:
     cx: float
     h: float
+    top: float
 
 
-ON_TARGET = Egg(cx=ALIGN_TARGET_CX, h=ALIGN_TARGET_H)
-FAR_RIGHT = Egg(cx=0.8, h=0.4)
+ON_TARGET = Egg(cx=ALIGN_TARGET_CX, h=0.6, top=ALIGN_TARGET_TOP)
+FAR_RIGHT = Egg(cx=0.8, h=0.4, top=0.3)  # top above the target: farther
 WRIST_EGG = object()  # any non-None wrist detection counts as "egg in view"
 
 
@@ -121,9 +123,10 @@ class ArmPhaseTests(unittest.TestCase):
         runner.run_until("wrist_check")
         for _ in range(ENABLED.wrist_check_frames):
             result = runner.step(wrist=None)
-        self.assertEqual((result.outcome, result.state.phase), ("no_wrist_egg", "to_release"))
+        self.assertEqual((result.outcome, result.state.phase, result.state.failure),
+                         ("no_wrist_egg", "to_release", "no_wrist_egg"))
         runner.run_until("idle")
-        self.assertEqual(runner.outcomes(), ["no_wrist_egg", "done"])
+        self.assertEqual(runner.outcomes(), ["no_wrist_egg", "no_wrist_egg_returned"])  # never "done"
 
     def test_enabled_check_with_an_egg_in_any_frame_goes_to_the_stub(self):
         runner = Runner(limits=ENABLED)
@@ -149,6 +152,18 @@ class TimeoutTests(unittest.TestCase):
         result = catch_step(self.phase_state("to_catch"), None, None, far, LIMITS.pose_timeout_s + 0.01, LIMITS)
         self.assertEqual((result.outcome, result.state.phase, result.arm, result.base),
                          ("catch_timeout", "to_release", far, zero_base()))
+
+    def test_catch_pose_timeout_returns_without_done(self):
+        far = {**START, "arm_elbow_flex.pos": 179.0}
+        timed_out = catch_step(self.phase_state("to_catch"), None, None, far, LIMITS.pose_timeout_s + 0.01, LIMITS)
+        state, arm, now = timed_out.state, timed_out.arm, LIMITS.pose_timeout_s + 0.01
+        for _ in range(2000):
+            now += FRAME
+            result = catch_step(state, None, None, arm, now, LIMITS)
+            state, arm = result.state, result.arm
+            if result.outcome != "running":
+                break
+        self.assertEqual((result.outcome, result.state), ("catch_timeout_returned", CatchState()))
 
     def test_release_pose_timeout_ends_the_action_with_a_held_arm(self):
         far = {**START, "arm_elbow_flex.pos": 179.0}

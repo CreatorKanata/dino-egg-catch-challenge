@@ -1,7 +1,9 @@
 """tests/robot/test_align.py: Hardware-free checks of the Auto Catch base alignment controller.
 
 align.py is pure and stdlib-only, so the sign conventions (egg right of target -> move right,
--y; egg smaller than target -> forward, +x), the linear speed taper (half error -> half speed,
+-y; a height measure smaller than target -> forward, +x; the egg's top edge, the default distance
+measure, larger than target -> forward), the top-edge window and stall guard with the config
+values, the linear speed taper (half error -> half speed,
 beyond the full-speed error -> max), zero inside a tolerance and no stall just outside it, the
 min-speed deadband, EMA smoothing, the per-frame rate limit, the done / lost / timeout paths,
 and the trace row are verified directly with duck-typed eggs. The Auto Release basket target
@@ -26,7 +28,7 @@ from robot.align import (
     zero_base,
 )
 
-TARGET = AlignTarget(cx=0.5, cy=0.5, h=0.6)
+TARGET = AlignTarget(cx=0.5, cy=0.5, h=0.6, size_attr="h", larger_is_farther=False)  # generic height measure
 GAINS = AlignGains(max_xy=0.06, full_speed_error_cx=0.2, full_speed_error_h=0.3, min_xy=0.015, tol_cx=0.05,
                    tol_h_far=0.08, tol_h_near=0.08, smoothing=0.5, max_accel=0.15, done_frames=3, lost_frames=2,
                    timeout_s=10.0)
@@ -38,6 +40,7 @@ FRAME = 1 / 30
 class Egg:
     cx: float
     h: float
+    top: float = 0.0
 
 
 ON_TARGET = Egg(cx=0.5, h=0.6)
@@ -85,37 +88,47 @@ class TaperTests(unittest.TestCase):
 
     def test_config_guards_hold(self):
         for tol, full in ((config.ALIGN_TOL_CX, config.ALIGN_FULL_SPEED_ERROR_CX),
-                          (config.ALIGN_TOL_H_FAR, config.ALIGN_FULL_SPEED_ERROR_H),
-                          (config.ALIGN_TOL_H_NEAR, config.ALIGN_FULL_SPEED_ERROR_H)):
+                          (config.ALIGN_TOL_TOP_FAR, config.ALIGN_FULL_SPEED_ERROR_TOP),
+                          (config.ALIGN_TOL_TOP_NEAR, config.ALIGN_FULL_SPEED_ERROR_TOP)):
             self.assertGreaterEqual(config.ALIGN_MAX_XY * min(1.0, tol / full), config.ALIGN_MIN_XY - 1e-9)
         self.assertLessEqual(config.ALIGN_MAX_XY, config.SPEED_LEVELS[0].xy)
         edge = AlignTarget()
-        for egg in (Egg(edge.cx + config.ALIGN_TOL_CX + 0.001, edge.h - config.ALIGN_TOL_H_FAR - 0.001),
-                    Egg(edge.cx - config.ALIGN_TOL_CX - 0.001, edge.h + config.ALIGN_TOL_H_NEAR + 0.001)):
+        for egg in (Egg(edge.cx + config.ALIGN_TOL_CX + 0.001, 0.6, edge.h + config.ALIGN_TOL_TOP_FAR + 0.001),
+                    Egg(edge.cx - config.ALIGN_TOL_CX - 0.001, 0.6, edge.h - config.ALIGN_TOL_TOP_NEAR - 0.001)):
             with self.subTest(egg=egg):
                 base, done = align_command(egg)
                 self.assertFalse(done)
-                self.assertGreaterEqual(abs(base["x.vel"]), config.ALIGN_MIN_XY)
+                self.assertGreaterEqual(abs(base["x.vel"]), config.ALIGN_MIN_XY - 1e-9)
                 self.assertGreaterEqual(abs(base["y.vel"]), config.ALIGN_MIN_XY)
 
-    def test_asymmetric_height_window_with_config_values(self):
+    def test_top_edge_sign_and_asymmetric_window_with_config_values(self):
         target = AlignTarget()
-        cases = ((-0.03, "forward"), (-0.01, "done"), (0.05, "done"), (0.10, "backward"))  # egg h - target h
-        for delta, expected in cases:
+        self.assertEqual((target.size_attr, target.larger_is_farther, target.h), ("top", True, config.ALIGN_TARGET_TOP))
+        cases = ((0.05, "forward"), (0.02, "forward"), (0.01, "done"), (-0.03, "done"), (-0.05, "backward"))
+        for delta, expected in cases:  # egg top - target top; larger top = higher in the image = farther
             with self.subTest(delta=delta):
-                base, done = align_command(Egg(target.cx, target.h + delta))
+                base, done = align_command(Egg(target.cx, 0.99, target.h + delta))  # h is ignored
                 if expected == "done":
                     self.assertEqual((base["x.vel"], done), (0.0, True))
                 else:
                     self.assertFalse(done)
                     self.assertEqual(base["x.vel"] > 0, expected == "forward")
                     self.assertNotEqual(base["x.vel"], 0.0)
+        far, _ = align_command(Egg(target.cx, 0.5, target.h + config.ALIGN_FULL_SPEED_ERROR_TOP))
+        self.assertAlmostEqual(far["x.vel"], config.ALIGN_MAX_XY)  # full speed at the full-speed error
+
+    def test_egg_detection_top_edge(self):
+        from robot.vision.egg_size import EggDetection
+
+        egg = EggDetection(cx=0.49, cy=0.529, w=0.57, h=0.608, color="green", spots=5, area_px=1)
+        self.assertAlmostEqual(egg.top, 0.225)
 
 
 class SmoothingAndRateTests(unittest.TestCase):
     def test_smoothing(self):
-        self.assertEqual(smooth(None, Egg(0.8, 0.4), 0.5), Measurement(0.8, 0.4))
-        averaged = smooth(Measurement(0.4, 0.2), Egg(0.8, 0.4), 0.5)
+        self.assertEqual(smooth(None, Egg(0.8, 0.4), 0.5, "h"), Measurement(0.8, 0.4))
+        self.assertEqual(smooth(None, Egg(0.8, 0.4, 0.3), 0.5), Measurement(0.8, 0.3))  # default: top edge
+        averaged = smooth(Measurement(0.4, 0.2), Egg(0.8, 0.4), 0.5, "h")
         self.assertAlmostEqual(averaged.cx, 0.6)
         self.assertAlmostEqual(averaged.h, 0.3)
         self.assertEqual(smooth(Measurement(0.4, 0.2), None, 0.5), Measurement(0.4, 0.2))
@@ -191,10 +204,11 @@ class StepResultTests(unittest.TestCase):
     def test_config_defaults(self):
         state = start_align(5.0)
         self.assertEqual((state.phase, state.started_at, state.updated_at), ("aligning", 5.0, 5.0))
+        on_target = Egg(config.ALIGN_TARGET_CX, 0.5, config.ALIGN_TARGET_TOP)
         for index in range(config.ALIGN_DONE_FRAMES - 1):
-            state, _, result = align_step(state, AlignTarget(), 5.0 + FRAME * index)
+            state, _, result = align_step(state, on_target, 5.0 + FRAME * index)
             self.assertEqual(result, "running")
-        self.assertEqual(align_step(state, AlignTarget(), 6.0)[2], "done")
+        self.assertEqual(align_step(state, on_target, 6.0)[2], "done")
         lost = start_align(0.0)
         for _ in range(config.ALIGN_LOST_FRAMES - 1):
             lost, _, _ = align_step(lost, None, 0.1)
@@ -203,12 +217,14 @@ class StepResultTests(unittest.TestCase):
 
     def test_trace_row(self):
         before = replace(start_align(1.0), smoothed=Measurement(0.7, 0.4))
-        row = trace_row(before, Egg(0.9, 0.6), 1.5, {"x.vel": 0.01, "y.vel": -0.02, "theta.vel": 0.0}, "running", 0.5)
-        self.assertEqual((row.t, row.cx_raw, row.h_raw, row.x_vel, row.y_vel, row.result),
-                         (0.5, 0.9, 0.6, 0.01, -0.02, "running"))
+        row = trace_row(before, Egg(0.9, 0.6, 0.2), 1.5, {"x.vel": 0.01, "y.vel": -0.02, "theta.vel": 0.0}, "running",
+                        0.5)
+        self.assertEqual((row.t, row.cx_raw, row.h_raw, row.top_raw, row.x_vel, row.y_vel, row.result),
+                         (0.5, 0.9, 0.6, 0.2, 0.01, -0.02, "running"))
         self.assertAlmostEqual(row.cx_smooth, 0.8)
+        self.assertAlmostEqual(row.top_smooth, 0.3)  # EMA of the top edge, not of h
         empty = trace_row(start_align(0.0), None, 0.1, zero_base(), "lost", 0.5)
-        self.assertEqual((empty.cx_raw, empty.cx_smooth), (None, None))
+        self.assertEqual((empty.cx_raw, empty.top_raw, empty.cx_smooth), (None, None, None))
 
     def test_does_not_mutate_input(self):
         state = start_align(0.0)
@@ -247,6 +263,12 @@ class BasketTargetTests(unittest.TestCase):
         for frame in range(config.ALIGN_DONE_FRAMES):
             state, _, result = align_step(state, Basket(0.53, target_w), FRAME * frame, RELEASE_TARGET, RELEASE_GAINS)
         self.assertEqual(result, "done")
+
+    def test_basket_path_keeps_its_width_sense_and_full_speed(self):
+        from robot.auto_release import RELEASE_GAINS, RELEASE_TARGET
+
+        self.assertEqual((RELEASE_TARGET.size_attr, RELEASE_TARGET.larger_is_farther), ("w", False))
+        self.assertEqual(RELEASE_GAINS.full_speed_error_h, config.ALIGN_FULL_SPEED_ERROR_H)
 
     def test_smooth_reads_the_named_size(self):
         self.assertEqual(smooth(None, Basket(0.5, 0.8), 0.5, "w"), Measurement(0.5, 0.8))
