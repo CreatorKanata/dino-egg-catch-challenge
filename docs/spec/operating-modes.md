@@ -64,6 +64,8 @@ Arm torque is deliberately not released on `Stop`: the SO-ARM101 has no brakes, 
 4. Catch: the pick policy runs on the wrist camera only (owner decision, consistent with the golf-ball result), from the catch pose until the egg is held. Success is checked before the signboard says "caught".
 5. The arm moves slowly to the release pose (head up) with the egg held; driving and Auto Release continue from there.
 
+The pick policy is trained in the LeRobot fork (ACT first, SmolVLA as a comparison) and consumed here through a policy runner that can be interrupted. Demonstrations are recorded with the fork's `lerobot-record` (owner decision, 2026-09-25), not inside this application: the robot is parked on a floor mark, eggs are placed at a marked best position with small deliberate offsets inside the alignment tolerance, and each episode runs from the catch pose (head down, egg in the wrist view) until the egg is held. The application reproduces that start state at demo time through alignment and the catch pose.
+
 ### Auto Release
 
 1. Precondition: the pink basket is detected in the front camera and is wide enough (`AUTO_RELEASE_MIN_BASKET_W`, normalized width). Otherwise "Basket not in view" or "Basket too far".
