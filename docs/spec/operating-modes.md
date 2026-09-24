@@ -68,7 +68,7 @@ Arm torque is deliberately not released on `Stop`: the SO-ARM101 has no brakes, 
 2. The arm moves to the home/base pose (neck folded) while keeping the gripper angle unchanged so the egg stays held.
 3. A recorded release motion (a fixed joint trajectory, not a learned policy) delivers the egg into the basket and opens the mouth, then returns to home.
 
-The first detector version is a local color-based detector (HSV thresholds per egg color and for the pink basket), because it must answer every frame without a network call and the basket was made pink precisely to be found by color. Thresholds are calibrated at the venue and stored in `config.py`.
+Egg colors (owner decision, 2026-09-24): white eggs with **green, red, or orange** spots. Blue spots were dropped that day because on the robot they measured the same hue, saturation, and value as the blue tarp; orange is added by painting. The detector is local (no network call), anchored on the spots found as edge ellipses surrounded by white egg body, classified by spot color, with the pink basket excluded by color. Thresholds are calibrated from captures on the robot and stored in the vision config.
 
 ## 5. FSC details that follow from the above
 
