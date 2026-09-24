@@ -12,7 +12,7 @@ import unittest
 from robot.align import AlignState
 from robot.arm_follow import ArmFollowState
 from robot.auto_catch import CatchRequest, start_catch
-from robot.config import ALIGN_TARGET_CX, ALIGN_TARGET_H, ARM_KEYS, NOTICE_SECONDS
+from robot.config import ALIGN_TARGET_CX, ALIGN_TARGET_W_EGG, ARM_KEYS, NOTICE_SECONDS
 from robot.dino_controller_reader import INITIAL_STATE
 from robot.drive_state import DriveState
 from robot.manual_mode import CommandResult, fold_commands, leader_wanted, plan_arm, plan_base, step_auto_catch
@@ -72,7 +72,7 @@ class StepAutoCatchTests(unittest.TestCase):
         self.assertFalse(result.stop_base or result.disengage_arm)
 
     def test_done_alignment_moves_on_and_timeout_ends_the_action(self):
-        on_target = replace(FAR_EGG, cx=ALIGN_TARGET_CX, h=ALIGN_TARGET_H)
+        on_target = replace(FAR_EGG, cx=ALIGN_TARGET_CX, w=ALIGN_TARGET_W_EGG)
         almost = replace(ALIGNING, catch=replace(ALIGNING.catch, align=AlignState("aligning", 0.0, ok_frames=100)))
         result, base, _, row = step_auto_catch(CommandResult(almost, False, False), on_target, None, HOLD, 1.0)
         self.assertEqual((row.result, result.app.action, result.app.catch.phase), ("done", "auto_catch", "to_catch"))

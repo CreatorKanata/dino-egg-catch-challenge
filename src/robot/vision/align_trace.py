@@ -1,7 +1,7 @@
 """src/robot/vision/align_trace.py: Per-frame CSV trace of an Auto Catch alignment, for tuning.
 
-While aligning, the loop appends one row per frame (time since start, raw egg cx, h, and top edge,
-smoothed cx and top edge, commanded x/y velocities, result) to `captures/<YYYYmmdd-HHMMSS>-align.csv`, stamped at the
+While aligning, the loop appends one row per frame (time since start, raw egg cx, ellipse width,
+bbox height, and top edge, smoothed cx and ellipse width, commanded x/y velocities, result) to `captures/<YYYYmmdd-HHMMSS>-align.csv`, stamped at the
 alignment start. Each call opens the file in append mode and writes one line, so the loop is
 never blocked for longer than that. Stdlib-only; the directory is git-ignored (CAPTURE_DIR).
 """
@@ -13,7 +13,7 @@ import time
 from robot.align import TraceRow
 from robot.config import CAPTURE_DIR
 
-TRACE_COLUMNS = ("t", "cx_raw", "h_raw", "top_raw", "cx_smooth", "top_smooth", "x_vel", "y_vel", "result")
+TRACE_COLUMNS = ("t", "cx_raw", "w_raw", "h_raw", "top_raw", "cx_smooth", "w_smooth", "x_vel", "y_vel", "result")
 STAMP_FORMAT = "%Y%m%d-%H%M%S"
 
 

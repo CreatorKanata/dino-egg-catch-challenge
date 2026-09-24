@@ -3,9 +3,10 @@
 Drives the base until the egg in the front image sits at the best position (ALIGN_TARGET_* in
 config.py; docs/spec/operating-modes.md, section 4). LeKiwiClient's sign convention (forward =
 +x, left = +y): an egg right of the target moves the base right (-y); an egg farther than the
-target drives forward (+x). The egg's distance measure is its bbox top edge (top = cy - h/2;
-larger = higher in the image = farther), because the bbox height changes with the light when the
-shadowed underside merges with the tarp. Owner request (2026-09-24, the first version oscillated): the speed
+target drives forward (+x). The egg's distance measure is its fitted-ellipse width
+(EggDetection.ellipse_w; narrower = farther): the bbox height changes with the light (the shadowed
+underside merges with the tarp) and the top edge saturates at the camera's horizon closer than the
+best position (robot run 2026-09-25). Owner request (2026-09-24, the first version oscillated): the speed
 tapers linearly to zero near the target (max_xy * clamp(error / full-speed error, -1, 1)), an axis
 inside its tolerance gets 0 (the distance window is asymmetric: closer is fine, farther is not),
 tiny commands become 0, cx and the distance measure are smoothed with an exponential moving
@@ -13,8 +14,8 @@ average, and each command changes by at most max_accel * dt per frame. While the
 flickers out of detection (fewer than lost_frames consecutive misses) the controller keeps steering
 toward the last smoothed position (robot run 2026-09-24: far eggs flicker). Terminal results
 return zeros at once. The distance measure is selectable (AlignTarget.size_attr and
-larger_is_farther): the egg uses its top edge (larger = farther), the Auto Release basket its bbox
-width (larger = closer; the same controller, other target and tolerances). Pure and stdlib-only:
+larger_is_farther): the egg uses its ellipse width, the Auto Release basket its bbox width (both
+larger = closer; the same controller, other target and tolerances). Pure and stdlib-only:
 detections are duck-typed (cx and the measure's attribute).
 """
 
@@ -24,7 +25,7 @@ from typing import Literal, Protocol
 from robot.config import (
     ALIGN_DONE_FRAMES,
     ALIGN_FULL_SPEED_ERROR_CX,
-    ALIGN_FULL_SPEED_ERROR_TOP,
+    ALIGN_FULL_SPEED_ERROR_W,
     ALIGN_LOST_FRAMES,
     ALIGN_MAX_ACCEL,
     ALIGN_MAX_XY,
@@ -32,11 +33,11 @@ from robot.config import (
     ALIGN_SMOOTHING,
     ALIGN_TARGET_CX,
     ALIGN_TARGET_CY,
-    ALIGN_TARGET_TOP,
+    ALIGN_TARGET_W_EGG,
     ALIGN_TIMEOUT_S,
     ALIGN_TOL_CX,
-    ALIGN_TOL_TOP_FAR,
-    ALIGN_TOL_TOP_NEAR,
+    ALIGN_TOL_W_FAR,
+    ALIGN_TOL_W_NEAR,
     LOOP_HZ,
 )
 
@@ -46,26 +47,29 @@ MAX_FRAME_DT_S = 2 / LOOP_HZ  # same clamp as the rotation budget and the arm ap
 
 
 class EggLike(Protocol):
-    """The detection fields the egg path uses (normalized bbox center x, height, and top edge); the
-    controller reads the attribute named by AlignTarget.size_attr (the basket path reads `w`)."""
+    """The detection fields the egg path uses (normalized bbox center x, bbox width and height, top
+    edge, ellipse width); the controller reads the attribute named by AlignTarget.size_attr (the
+    basket path reads `w`)."""
 
     cx: float
+    w: float
     h: float
     top: float
+    ellipse_w: float
 
 
 @dataclass(frozen=True)
 class AlignTarget:
     """Best position in the front image, normalized: bbox center and the target value `h` of the
-    distance measure named by `size_attr` (the egg's top edge by default; "w" for the basket).
-    `larger_is_farther`: True when a larger value means farther (the top edge), False when it means
-    closer (bbox height or width)."""
+    distance measure named by `size_attr` (the egg's ellipse width by default; "w" for the basket).
+    `larger_is_farther`: False when a larger value means closer (widths, height), True when it means
+    farther (a measure like the top edge, which rises toward the horizon)."""
 
     cx: float = ALIGN_TARGET_CX
     cy: float = ALIGN_TARGET_CY
-    h: float = ALIGN_TARGET_TOP
-    size_attr: Literal["h", "w", "top"] = "top"
-    larger_is_farther: bool = True
+    h: float = ALIGN_TARGET_W_EGG
+    size_attr: Literal["h", "w", "top", "ellipse_w"] = "ellipse_w"
+    larger_is_farther: bool = False
 
 
 @dataclass(frozen=True)
@@ -74,11 +78,11 @@ class AlignGains:
 
     max_xy: float = ALIGN_MAX_XY
     full_speed_error_cx: float = ALIGN_FULL_SPEED_ERROR_CX
-    full_speed_error_h: float = ALIGN_FULL_SPEED_ERROR_TOP  # of the distance measure
+    full_speed_error_h: float = ALIGN_FULL_SPEED_ERROR_W  # of the distance measure
     min_xy: float = ALIGN_MIN_XY
     tol_cx: float = ALIGN_TOL_CX
-    tol_h_far: float = ALIGN_TOL_TOP_FAR  # measure farther than the target by at most this
-    tol_h_near: float = ALIGN_TOL_TOP_NEAR  # measure closer than the target by at most this
+    tol_h_far: float = ALIGN_TOL_W_FAR  # measure farther than the target by at most this
+    tol_h_near: float = ALIGN_TOL_W_NEAR  # measure closer than the target by at most this
     smoothing: float = ALIGN_SMOOTHING
     max_accel: float = ALIGN_MAX_ACCEL
     done_frames: int = ALIGN_DONE_FRAMES
@@ -88,7 +92,7 @@ class AlignGains:
 
 @dataclass(frozen=True)
 class Measurement:
-    """Smoothed position: normalized cx and `h`, the distance measure (egg top edge or basket width)."""
+    """Smoothed position: normalized cx and `h`, the distance measure (egg ellipse width or basket width)."""
 
     cx: float
     h: float
@@ -123,7 +127,7 @@ def start_align(now: float) -> AlignState:
 
 
 def smooth(
-    previous: Measurement | None, det: EggLike | None, weight: float = ALIGN_SMOOTHING, size_attr: str = "top"
+    previous: Measurement | None, det: EggLike | None, weight: float = ALIGN_SMOOTHING, size_attr: str = "ellipse_w"
 ) -> Measurement | None:
     """EMA of cx and the size measure (attribute `size_attr`) with `weight` on the new sample; the
     first sample is taken as is and a missing detection leaves the average unchanged."""
@@ -211,15 +215,17 @@ def align_step(
 
 @dataclass(frozen=True)
 class TraceRow:
-    """One alignment frame for offline tuning: time since start, raw cx, height, and top edge, smoothed
-    cx and top edge (the distance measure), command, result."""
+    """One alignment frame for offline tuning: time since start, raw cx, distance measure (w_raw: the
+    egg's ellipse width), bbox height and top edge (for analysis), smoothed cx and distance measure,
+    command, result."""
 
     t: float
     cx_raw: float | None
+    w_raw: float | None
     h_raw: float | None
     top_raw: float | None
     cx_smooth: float | None
-    top_smooth: float | None
+    w_smooth: float | None
     x_vel: float
     y_vel: float
     result: AlignResult
@@ -234,10 +240,11 @@ def trace_row(
     return TraceRow(
         t=now - before.started_at,
         cx_raw=None if det is None else det.cx,
+        w_raw=None if det is None else float(getattr(det, target.size_attr)),
         h_raw=None if det is None else det.h,
         top_raw=None if det is None else getattr(det, "top", None),
         cx_smooth=None if smoothed is None else smoothed.cx,
-        top_smooth=None if smoothed is None else smoothed.h,
+        w_smooth=None if smoothed is None else smoothed.h,
         x_vel=base["x.vel"],
         y_vel=base["y.vel"],
         result=result,

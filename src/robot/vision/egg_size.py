@@ -8,9 +8,10 @@ the pure decision modules and the signboard child can import it without OpenCV.
 """
 
 from dataclasses import dataclass
+import math
 from typing import Final, Literal, Protocol
 
-from robot.config import AUTO_CATCH_MAX_EGG_H, AUTO_CATCH_MIN_EGG_H
+from robot.config import AUTO_CATCH_MAX_EGG_H, AUTO_CATCH_MIN_EGG_H, PI_CAMERA_ASPECT
 
 SizeClass = Literal["none", "too_small", "too_large", "ok"]
 SIZE_CLASSES: Final = ("none", "too_small", "too_large", "ok")
@@ -39,9 +40,22 @@ class EggDetection:
 
     @property
     def top(self) -> float:
-        """Normalized top edge of the bbox (cy - h/2): the alignment's distance measure, stable under
-        changing light, unlike h, whose shadowed lower end merges with the tarp."""
+        """Normalized top edge of the bbox (cy - h/2). Reported for analysis only: it saturates at the
+        front camera's horizon (~0.22) for every distance closer than the best position."""
         return self.cy - self.h / 2
+
+    @property
+    def ellipse_w(self) -> float:
+        """Horizontal extent of the fitted ellipse, clipped to the frame, divided by the frame width: the
+        alignment's distance measure (larger = closer). The bbox width when no ellipse was fitted. The
+        second axis is normalized by the frame height, so it is rescaled by PI_CAMERA_ASPECT (width /
+        height of the front frame)."""
+        if self.ellipse is None:
+            return self.w
+        center_x, _, axis_a, axis_b, angle = self.ellipse
+        theta = math.radians(angle)
+        half = math.hypot(axis_a / 2 * math.cos(theta), axis_b / PI_CAMERA_ASPECT / 2 * math.sin(theta))
+        return min(1.0, center_x + half) - max(0.0, center_x - half)
 
 
 @dataclass(frozen=True)

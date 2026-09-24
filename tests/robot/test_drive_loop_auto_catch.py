@@ -28,13 +28,13 @@ from robot.config import (
     ALIGN_LOST_FRAMES,
     ALIGN_MAX_ACCEL,
     ALIGN_TARGET_CX,
-    ALIGN_TARGET_H,
+    ALIGN_TARGET_W_EGG,
     LOOP_HZ,
 )
 from robot.vision.egg_size import EggDetection
 
 FAR_RIGHT = EggDetection(cx=0.8, cy=0.5, w=0.4, h=0.4, color="green", spots=3, area_px=20000)
-ON_TARGET = replace(FAR_RIGHT, cx=ALIGN_TARGET_CX, h=ALIGN_TARGET_H)
+ON_TARGET = replace(FAR_RIGHT, cx=ALIGN_TARGET_CX, w=ALIGN_TARGET_W_EGG)  # no ellipse: ellipse_w = bbox w
 TINY = replace(FAR_RIGHT, h=0.05)
 
 

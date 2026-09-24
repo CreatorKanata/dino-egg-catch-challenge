@@ -70,6 +70,7 @@ PiCameraColorOrder = Literal["rgb", "bgr"]
 PI_CAMERA_COLOR_ORDER: PiCameraColorOrder = "rgb"
 FRONT_CAMERA_KEY: Final = "front"
 WRIST_CAMERA_KEY: Final = "wrist"
+PI_CAMERA_ASPECT: Final = 4 / 3  # front and wrist are 640x480 (config_lekiwi.py in the fork)
 PI_CAMERA_KEYS: Final = (FRONT_CAMERA_KEY, WRIST_CAMERA_KEY)
 
 # --- Arm during Manual Mode -----------------------------------------------------------------
@@ -201,28 +202,27 @@ RERUN_SESSION_NAME: Final = "dino_drive_mode"
 # --- Auto Catch step 1: front-camera egg detection and base alignment (Phase 2) --------------
 # The egg detector's HSV ranges and segmentation tunables live in robot/vision/config_vision.py
 # (moved to keep this file under 300 lines); the alignment and precondition values stay here.
-# Best position (pick policy start pose), normalized, from capture 20260924-220742 (owner, best position).
-# The controller steers on cx and the egg's top edge (top = cy - h/2): the bbox height is unreliable because
-# the shadowed underside merges with the tarp (best position 220742 / 225648 / 010212: h 0.608 / 0.583 /
-# 0.542, top 0.225 / 0.2165 / 0.216; far 222325 / 003436 / 230437: top 0.273 / 0.273 / 0.266).
+# Best position (pick policy start pose), normalized. Distance is steered on the egg's fitted-ellipse width
+# (EggDetection.ellipse_w; larger = closer): monotonic, smallest spread at the best position. Not h (shadow)
+# and not the top edge (it saturates at the camera's horizon, run 2026-09-25); see src/robot/README.md.
 ALIGN_TARGET_CX: Final = 0.49
-ALIGN_TARGET_TOP: Final = 0.22  # larger top = egg higher in the image = farther -> forward
+ALIGN_TARGET_W_EGG: Final = 0.607  # median ellipse width of the best-position group
 ALIGN_TARGET_CY: Final = 0.53  # cy, w, h only draw the guide (and h bounds the size precondition below)
 ALIGN_TARGET_W: Final = 0.57  # the current detector's width reading of 220742 (2026-09-25), guide only
 ALIGN_TARGET_H: Final = 0.61
 ALIGN_TOL_CX: Final = 0.05
-# Asymmetric window (owner 2026-09-24: closer is fine, farther is not): target - NEAR <= top <= target + FAR.
-ALIGN_TOL_TOP_FAR: Final = 0.015  # top larger than the target by more than this -> forward
-ALIGN_TOL_TOP_NEAR: Final = 0.04  # top smaller (closer) by at most this
+# Asymmetric window (owner 2026-09-24: closer is fine, farther is not): target - FAR <= width <= target + NEAR.
+ALIGN_TOL_W_FAR: Final = 0.04  # narrower than the target by more than this -> forward
+ALIGN_TOL_W_NEAR: Final = 0.10  # wider (closer) by at most this; beyond -> back up
 # Precondition at the Hi! press: normalized bbox height window.
 AUTO_CATCH_MIN_EGG_H: Final = 0.15  # below: "Egg too far"
 AUTO_CATCH_MAX_EGG_H: Final = 0.85  # above: "Egg too close"
 # Tapered controller (owner request 2026-09-24; the first version oscillated): per axis ALIGN_MAX_XY *
-# clamp(error / full-speed error, -1, 1), 0 inside the tolerance, < ALIGN_MIN_XY -> 0; cx/top EMA-smoothed
+# clamp(error / full-speed error, -1, 1), 0 inside the tolerance, < ALIGN_MIN_XY -> 0; cx/width EMA-smoothed
 # (weight of the new sample); rate-limited to ALIGN_MAX_ACCEL. The Pi stream adds ~100-200 ms latency.
 ALIGN_MAX_XY: Final = 0.06  # m/s, below the slow level (SPEED_LEVELS[0].xy = 0.1)
 ALIGN_FULL_SPEED_ERROR_CX: Final = 0.18  # normalized cx error at which ALIGN_MAX_XY is reached
-ALIGN_FULL_SPEED_ERROR_TOP: Final = 0.06  # top error for ALIGN_MAX_XY (far-to-target is ~0.05; <= 0.06: guard)
+ALIGN_FULL_SPEED_ERROR_W: Final = 0.15  # egg width error for ALIGN_MAX_XY (<= 0.15: stall guard)
 ALIGN_FULL_SPEED_ERROR_H: Final = 0.08  # bbox size error for ALIGN_MAX_XY on the basket width path (config_vision)
 ALIGN_MIN_XY: Final = 0.015  # m/s
 ALIGN_SMOOTHING: Final = 0.5
@@ -272,20 +272,20 @@ if not 0 < TOP_DISPLAY_WIDTH <= TOP_CAMERA_WIDTH:
     raise ValueError("Need 0 < TOP_DISPLAY_WIDTH <= TOP_CAMERA_WIDTH")
 if KACHI_BUFFER_MAX < max(len(phrase) for phrase, _ in KACHI_PHRASES):
     raise ValueError("KACHI_BUFFER_MAX must hold the longest KachiButton phrase")
-if not (ALIGN_TOL_CX > 0 and ALIGN_TOL_TOP_FAR > 0 and ALIGN_TOL_TOP_NEAR > 0 and 0 < ALIGN_TARGET_TOP < 1):
-    raise ValueError("ALIGN_TOL_CX, ALIGN_TOL_TOP_FAR, ALIGN_TOL_TOP_NEAR, ALIGN_TARGET_TOP out of range")
+if not (ALIGN_TOL_CX > 0 and ALIGN_TOL_W_FAR > 0 and ALIGN_TOL_W_NEAR > 0 and 0 < ALIGN_TARGET_W_EGG < 1):
+    raise ValueError("ALIGN_TOL_CX, ALIGN_TOL_W_FAR, ALIGN_TOL_W_NEAR, ALIGN_TARGET_W_EGG out of range")
 if not (0 < AUTO_CATCH_MIN_EGG_H < ALIGN_TARGET_H < AUTO_CATCH_MAX_EGG_H <= 1):
     raise ValueError("Need 0 < AUTO_CATCH_MIN_EGG_H < ALIGN_TARGET_H < AUTO_CATCH_MAX_EGG_H <= 1")
 if not (0 <= ALIGN_MIN_XY < ALIGN_MAX_XY and ALIGN_MAX_ACCEL > 0 and 0 < ALIGN_SMOOTHING <= 1):
     raise ValueError("Need 0 <= ALIGN_MIN_XY < ALIGN_MAX_XY, ALIGN_MAX_ACCEL > 0, 0 < ALIGN_SMOOTHING <= 1")
-if not (ALIGN_TOL_CX < ALIGN_FULL_SPEED_ERROR_CX and ALIGN_TOL_TOP_FAR < ALIGN_FULL_SPEED_ERROR_TOP):
-    raise ValueError("Full-speed errors must exceed ALIGN_TOL_CX and ALIGN_TOL_TOP_FAR")
+if not (ALIGN_TOL_CX < ALIGN_FULL_SPEED_ERROR_CX and ALIGN_TOL_W_FAR < ALIGN_FULL_SPEED_ERROR_W):
+    raise ValueError("Full-speed errors must exceed ALIGN_TOL_CX and ALIGN_TOL_W_FAR")
 # Stall guard: just outside every tolerance edge the tapered command (ALIGN_MAX_XY * min(1, tol /
 # full-speed error)) must reach ALIGN_MIN_XY, or the deadband zeroes it while the egg is not
-# "done" and the base waits for ALIGN_TIMEOUT_S. The tight far edge binds: 0.06 * 0.015 / 0.06 = 0.015
-# = ALIGN_MIN_XY (equality allowed; 1e-9 absorbs rounding). Near edge 0.04 m/s, cx edge 0.0167 m/s.
-_EDGES = ((ALIGN_TOL_CX, ALIGN_FULL_SPEED_ERROR_CX), (ALIGN_TOL_TOP_FAR, ALIGN_FULL_SPEED_ERROR_TOP),
-          (ALIGN_TOL_TOP_NEAR, ALIGN_FULL_SPEED_ERROR_TOP))
+# "done" and the base waits for ALIGN_TIMEOUT_S. The far edge binds: 0.06 * 0.04 / 0.15 = 0.016 >= 0.015
+# (0.25 would give 0.0096 and stall). Near edge 0.04 m/s, cx edge 0.0167 m/s; 1e-9 absorbs rounding.
+_EDGES = ((ALIGN_TOL_CX, ALIGN_FULL_SPEED_ERROR_CX), (ALIGN_TOL_W_FAR, ALIGN_FULL_SPEED_ERROR_W),
+          (ALIGN_TOL_W_NEAR, ALIGN_FULL_SPEED_ERROR_W))
 if any(ALIGN_MAX_XY * min(1.0, tol / full) < ALIGN_MIN_XY - 1e-9 for tol, full in _EDGES):
     raise ValueError("Need ALIGN_MAX_XY * min(1, tolerance / full-speed error) >= ALIGN_MIN_XY at every edge")
 if min(ALIGN_DONE_FRAMES, ALIGN_LOST_FRAMES, DETECT_TIMING_FRAMES) < 1 or not ALIGN_TIMEOUT_S > 0:

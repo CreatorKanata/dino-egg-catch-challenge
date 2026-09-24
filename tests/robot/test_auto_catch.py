@@ -15,7 +15,7 @@ import unittest
 from robot.align import zero_base
 from robot.auto_catch import CATCH_PHASES, CatchLimits, CatchState, catch_step, start_catch
 from robot.auto_release import GRIPPER_KEY
-from robot.config import ALIGN_DONE_FRAMES, ALIGN_LOST_FRAMES, ALIGN_TARGET_CX, ALIGN_TARGET_TOP, ALIGN_TIMEOUT_S
+from robot.config import ALIGN_DONE_FRAMES, ALIGN_LOST_FRAMES, ALIGN_TARGET_CX, ALIGN_TARGET_W_EGG, ALIGN_TIMEOUT_S
 from robot.config import ARM_KEYS, LOOP_HZ
 
 FRAME = 1 / LOOP_HZ
@@ -31,11 +31,11 @@ HOME = {**{key: 0.0 for key in ARM_KEYS}, GRIPPER_KEY: 50.0}  # the release pose
 class Egg:
     cx: float
     h: float
-    top: float
+    ellipse_w: float
 
 
-ON_TARGET = Egg(cx=ALIGN_TARGET_CX, h=0.6, top=ALIGN_TARGET_TOP)
-FAR_RIGHT = Egg(cx=0.8, h=0.4, top=0.3)  # top above the target: farther
+ON_TARGET = Egg(cx=ALIGN_TARGET_CX, h=0.6, ellipse_w=ALIGN_TARGET_W_EGG)
+FAR_RIGHT = Egg(cx=0.8, h=0.4, ellipse_w=0.4)  # narrower than the target: farther
 WRIST_EGG = object()  # any non-None wrist detection counts as "egg in view"
 
 

@@ -22,10 +22,10 @@ from loop_fakes import CATCH_POSE, DRIVING, FORWARD, FRONT_RGB, HOLD, NEAR, ZERO
 from loop_fakes import FakeReader, FakeView, temp_arm_paths
 from robot.arm_motions import load_pose
 from robot.auto_catch import CatchLimits
-from robot.config import ALIGN_TARGET_CX, ALIGN_TARGET_H, ARM_KEYS, LOOP_HZ, SAVE_CATCH_COMMAND
+from robot.config import ALIGN_TARGET_CX, ALIGN_TARGET_H, ALIGN_TARGET_W_EGG, ARM_KEYS, LOOP_HZ, SAVE_CATCH_COMMAND
 from robot.vision.egg_size import EggDetection, WristView
 
-ON_TARGET = EggDetection(cx=ALIGN_TARGET_CX, cy=0.5, w=0.6, h=ALIGN_TARGET_H, color="green", spots=3, area_px=20000)
+ON_TARGET = EggDetection(cx=ALIGN_TARGET_CX, cy=0.5, w=ALIGN_TARGET_W_EGG, h=ALIGN_TARGET_H, color="green", spots=3, area_px=20000)
 GRIPPER = "arm_gripper.pos"
 DISABLED = CatchLimits(wrist_check_enabled=False)
 ENABLED = CatchLimits(wrist_check_enabled=True)

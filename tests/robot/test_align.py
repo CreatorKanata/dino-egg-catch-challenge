@@ -1,9 +1,9 @@
 """tests/robot/test_align.py: Hardware-free checks of the Auto Catch base alignment controller.
 
 align.py is pure and stdlib-only, so the sign conventions (egg right of target -> move right,
--y; a height measure smaller than target -> forward, +x; the egg's top edge, the default distance
-measure, larger than target -> forward), the top-edge window and stall guard with the config
-values, the linear speed taper (half error -> half speed,
+-y; a size measure smaller than target -> forward, +x; the egg's ellipse width, the default
+distance measure: narrower -> forward, wider -> back up), the width window and stall guard with the
+config values, the ellipse-width measure itself, the linear speed taper (half error -> half speed,
 beyond the full-speed error -> max), zero inside a tolerance and no stall just outside it, the
 min-speed deadband, EMA smoothing, the per-frame rate limit, the done / lost / timeout paths,
 and the trace row are verified directly with duck-typed eggs. The Auto Release basket target
@@ -41,6 +41,7 @@ class Egg:
     cx: float
     h: float
     top: float = 0.0
+    ellipse_w: float = 0.0
 
 
 ON_TARGET = Egg(cx=0.5, h=0.6)
@@ -88,46 +89,54 @@ class TaperTests(unittest.TestCase):
 
     def test_config_guards_hold(self):
         for tol, full in ((config.ALIGN_TOL_CX, config.ALIGN_FULL_SPEED_ERROR_CX),
-                          (config.ALIGN_TOL_TOP_FAR, config.ALIGN_FULL_SPEED_ERROR_TOP),
-                          (config.ALIGN_TOL_TOP_NEAR, config.ALIGN_FULL_SPEED_ERROR_TOP)):
+                          (config.ALIGN_TOL_W_FAR, config.ALIGN_FULL_SPEED_ERROR_W),
+                          (config.ALIGN_TOL_W_NEAR, config.ALIGN_FULL_SPEED_ERROR_W)):
             self.assertGreaterEqual(config.ALIGN_MAX_XY * min(1.0, tol / full), config.ALIGN_MIN_XY - 1e-9)
         self.assertLessEqual(config.ALIGN_MAX_XY, config.SPEED_LEVELS[0].xy)
         edge = AlignTarget()
-        for egg in (Egg(edge.cx + config.ALIGN_TOL_CX + 0.001, 0.6, edge.h + config.ALIGN_TOL_TOP_FAR + 0.001),
-                    Egg(edge.cx - config.ALIGN_TOL_CX - 0.001, 0.6, edge.h - config.ALIGN_TOL_TOP_NEAR - 0.001)):
+        for egg in (Egg(edge.cx + config.ALIGN_TOL_CX + 0.001, 0.6, ellipse_w=edge.h - config.ALIGN_TOL_W_FAR - 0.001),
+                    Egg(edge.cx - config.ALIGN_TOL_CX - 0.001, 0.6, ellipse_w=edge.h + config.ALIGN_TOL_W_NEAR + 0.001)):
             with self.subTest(egg=egg):
                 base, done = align_command(egg)
                 self.assertFalse(done)
-                self.assertGreaterEqual(abs(base["x.vel"]), config.ALIGN_MIN_XY - 1e-9)
+                self.assertGreaterEqual(abs(base["x.vel"]), config.ALIGN_MIN_XY)
                 self.assertGreaterEqual(abs(base["y.vel"]), config.ALIGN_MIN_XY)
 
-    def test_top_edge_sign_and_asymmetric_window_with_config_values(self):
+    def test_ellipse_width_sign_and_asymmetric_window_with_config_values(self):
         target = AlignTarget()
-        self.assertEqual((target.size_attr, target.larger_is_farther, target.h), ("top", True, config.ALIGN_TARGET_TOP))
-        cases = ((0.05, "forward"), (0.02, "forward"), (0.01, "done"), (-0.03, "done"), (-0.05, "backward"))
-        for delta, expected in cases:  # egg top - target top; larger top = higher in the image = farther
+        self.assertEqual((target.size_attr, target.larger_is_farther, target.h),
+                         ("ellipse_w", False, config.ALIGN_TARGET_W_EGG))
+        cases = ((-0.30, "forward"), (-0.05, "forward"), (-0.03, "done"), (0.09, "done"), (0.15, "backward"))
+        for delta, expected in cases:  # egg width - target width; narrower = farther
             with self.subTest(delta=delta):
-                base, done = align_command(Egg(target.cx, 0.99, target.h + delta))  # h is ignored
+                base, done = align_command(Egg(target.cx, 0.99, 0.99, target.h + delta))  # h and top are ignored
                 if expected == "done":
                     self.assertEqual((base["x.vel"], done), (0.0, True))
                 else:
                     self.assertFalse(done)
                     self.assertEqual(base["x.vel"] > 0, expected == "forward")
                     self.assertNotEqual(base["x.vel"], 0.0)
-        far, _ = align_command(Egg(target.cx, 0.5, target.h + config.ALIGN_FULL_SPEED_ERROR_TOP))
+        far, _ = align_command(Egg(target.cx, 0.5, 0.2, target.h - config.ALIGN_FULL_SPEED_ERROR_W))
         self.assertAlmostEqual(far["x.vel"], config.ALIGN_MAX_XY)  # full speed at the full-speed error
 
-    def test_egg_detection_top_edge(self):
+    def test_egg_detection_ellipse_width_and_top_edge(self):
         from robot.vision.egg_size import EggDetection
 
-        egg = EggDetection(cx=0.49, cy=0.529, w=0.57, h=0.608, color="green", spots=5, area_px=1)
-        self.assertAlmostEqual(egg.top, 0.225)
+        plain = EggDetection(cx=0.49, cy=0.529, w=0.57, h=0.608, color="green", spots=5, area_px=1)
+        self.assertAlmostEqual(plain.top, 0.225)
+        self.assertEqual(plain.ellipse_w, 0.57)  # no ellipse: the bbox width
+        upright = replace(plain, ellipse=(0.5, 0.5, 0.6, 0.5, 0.0))
+        self.assertAlmostEqual(upright.ellipse_w, 0.6)
+        turned = replace(plain, ellipse=(0.5, 0.5, 0.6, 0.4, 90.0))  # second axis horizontal, 4:3 frame
+        self.assertAlmostEqual(turned.ellipse_w, 0.4 * 3 / 4)
+        cut = replace(plain, ellipse=(0.1, 0.5, 0.6, 0.5, 0.0))  # clipped at the left border
+        self.assertAlmostEqual(cut.ellipse_w, 0.4)
 
 
 class SmoothingAndRateTests(unittest.TestCase):
     def test_smoothing(self):
         self.assertEqual(smooth(None, Egg(0.8, 0.4), 0.5, "h"), Measurement(0.8, 0.4))
-        self.assertEqual(smooth(None, Egg(0.8, 0.4, 0.3), 0.5), Measurement(0.8, 0.3))  # default: top edge
+        self.assertEqual(smooth(None, Egg(0.8, 0.4, 0.3, 0.5), 0.5), Measurement(0.8, 0.5))  # default: ellipse width
         averaged = smooth(Measurement(0.4, 0.2), Egg(0.8, 0.4), 0.5, "h")
         self.assertAlmostEqual(averaged.cx, 0.6)
         self.assertAlmostEqual(averaged.h, 0.3)
@@ -204,7 +213,7 @@ class StepResultTests(unittest.TestCase):
     def test_config_defaults(self):
         state = start_align(5.0)
         self.assertEqual((state.phase, state.started_at, state.updated_at), ("aligning", 5.0, 5.0))
-        on_target = Egg(config.ALIGN_TARGET_CX, 0.5, config.ALIGN_TARGET_TOP)
+        on_target = Egg(config.ALIGN_TARGET_CX, 0.5, ellipse_w=config.ALIGN_TARGET_W_EGG)
         for index in range(config.ALIGN_DONE_FRAMES - 1):
             state, _, result = align_step(state, on_target, 5.0 + FRAME * index)
             self.assertEqual(result, "running")
@@ -217,14 +226,14 @@ class StepResultTests(unittest.TestCase):
 
     def test_trace_row(self):
         before = replace(start_align(1.0), smoothed=Measurement(0.7, 0.4))
-        row = trace_row(before, Egg(0.9, 0.6, 0.2), 1.5, {"x.vel": 0.01, "y.vel": -0.02, "theta.vel": 0.0}, "running",
-                        0.5)
-        self.assertEqual((row.t, row.cx_raw, row.h_raw, row.top_raw, row.x_vel, row.y_vel, row.result),
-                         (0.5, 0.9, 0.6, 0.2, 0.01, -0.02, "running"))
+        row = trace_row(before, Egg(0.9, 0.6, 0.2, 0.5), 1.5, {"x.vel": 0.01, "y.vel": -0.02, "theta.vel": 0.0},
+                        "running", 0.5)
+        self.assertEqual((row.t, row.cx_raw, row.w_raw, row.h_raw, row.top_raw, row.x_vel, row.y_vel, row.result),
+                         (0.5, 0.9, 0.5, 0.6, 0.2, 0.01, -0.02, "running"))
         self.assertAlmostEqual(row.cx_smooth, 0.8)
-        self.assertAlmostEqual(row.top_smooth, 0.3)  # EMA of the top edge, not of h
+        self.assertAlmostEqual(row.w_smooth, 0.45)  # EMA of the ellipse width, not of h
         empty = trace_row(start_align(0.0), None, 0.1, zero_base(), "lost", 0.5)
-        self.assertEqual((empty.cx_raw, empty.top_raw, empty.cx_smooth), (None, None, None))
+        self.assertEqual((empty.cx_raw, empty.w_raw, empty.cx_smooth, empty.w_smooth), (None, None, None, None))
 
     def test_does_not_mutate_input(self):
         state = start_align(0.0)
