@@ -18,7 +18,9 @@ This project develops the Dino Egg Catch Challenge: a LeKiwi mobile base, an SO-
 - `src/robot/`: robot integration, arm/base control, and operating modes.
 - `src/dino-controller/`: attendee inputs, controller behavior, and control interfaces.
 - `3d-models/`: reference models, editable designs, and fabrication exports.
-- `docs/`: concept, design decisions, validation records, and Maker Faire materials.
+- `docs/`: concept, guides, validation records, and Maker Faire materials.
+  - `docs/spec/`: settled specifications (owner decisions). Change them only with an owner decision.
+  - `docs/proposals/`: design proposals not yet decided or implemented. Promote a proposal into `docs/spec/` when the owner settles it.
 - Keep KachiButton implementation in its separate repository; document its prize integration here.
 
 ## Working agreements

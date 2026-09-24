@@ -8,7 +8,7 @@ Written: 2026-09-24. Status: verified runtime facts from the working teleoperati
 | Repository | Role | What lives there |
 | --- | --- | --- |
 | `../lerobot-dino-egg-catch-challenge` (LeRobot fork, `lerobot` 0.6.2, Python 3.12+) | Robot runtime and learning | LeKiwi host process on the Raspberry Pi, camera/motor configuration, calibration files (`dino_kiwi.json`, `dino_leader_arm.json` in the repository root), dataset recording, ACT/SmolVLA training and evaluation |
-| `dino-egg-catch-challenge` (this repository) | Attendee-facing application | Drive Mode teleoperation with the dino-controller, the three-camera view, and the Gemini Robotics task service described in [dino-egg-catch-challenge-gemini-integration.md](dino-egg-catch-challenge-gemini-integration.md) |
+| `dino-egg-catch-challenge` (this repository) | Attendee-facing application | Drive Mode teleoperation with the dino-controller, the three-camera view, and the Gemini Robotics task service described in [dino-egg-catch-challenge-gemini-integration.md](proposals/dino-egg-catch-challenge-gemini-integration.md) |
 
 Application code here imports LeRobot as a library. Nothing in this repository needs to be added inside the fork. The fork changes only when the robot itself changes: camera devices, motor settings, host timing, or training pipelines.
 
