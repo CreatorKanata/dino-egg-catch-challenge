@@ -1,8 +1,9 @@
 """tests/robot/vision/test_egg_detector.py: Synthetic-frame checks of the spot-anchored egg detector.
 
-Frames are drawn with cv2 (640x480, brown background) using the eggs' measured proportions: a
-white ellipse wider than tall with five spots of diameter ~1/4 of the egg height. One egg of each
-spot color (red on both hue ends) gives one detection with a tight bbox and a fitted ellipse;
+Frames are drawn with cv2 (640x480, blue tarp-colored background, no spot class) using the eggs'
+measured proportions: a white ellipse wider than tall with five spots of diameter ~1/4 of the egg
+height. One egg of each spot color (green, red on both hue ends, orange) gives one detection with a
+tight bbox and a fitted ellipse; a blue-spotted egg (blue dropped 2026-09-24) gives none;
 spotless shapes, pink blobs, and white bars give none; thin glint streaks touching an egg do not
 widen its box; two distant eggs give two clusters; eggs cut by the border and notched eggs are
 found; a red-spotted egg in front of the pink basket stays one red egg; every candidate reports
@@ -18,14 +19,17 @@ import numpy as np
 from robot.vision.egg_detector import DetectorParams, EggDetection, best_egg, detect_eggs, inspect_candidates
 
 WIDTH, HEIGHT = 640, 480
-BROWN = (40, 70, 110)  # BGR: H ~13, S ~160 -> neither white body nor any spot color
+BROWN = (110, 65, 30)  # BGR, HSV (107, 185, 110): blue tarp color -> neither white body nor any spot class
 WHITE = (245, 245, 245)
 PINK = (110, 80, 150)  # BGR: H ~167, S ~119, V 150 -> inside BASKET_HSV
-# red_low is H 0, red_high H 177 (both ends of the red hue range)
-SPOT_BGR = {"green": (40, 160, 60), "blue": (200, 60, 30), "red_low": (40, 40, 220), "red_high": (59, 43, 200)}
+# red_low is H 0, red_high H 177 (both ends of the red hue range), orange H 15
+SPOT_BGR = {"green": (40, 160, 60), "orange": (30, 125, 220), "red_low": (40, 40, 220), "red_high": (59, 43, 200)}
 BASKET_BGR = ((38, 29, 60), (29, 18, 60))  # HSV (171, 132, 60) and (172, 179, 60): the real basket's pink
 SPOT_LAYOUT = ((-0.55, 0.05), (0.55, -0.1), (0.0, -0.6), (0.0, 0.55), (0.05, 0.0))  # x a, y b
 TOLERANCE_PX = 4
+HSV = DetectorParams(spot_detector="hsv")
+TARP_BGR = (72, 44, 26)  # HSV ~ (105, 162, 72): the blue tarp, and the (dropped) blue egg's spots
+BLUE_SPOT_BGR = (70, 30, 10)  # HSV ~ (104, 219, 70): dark blue spot, the same hue as the tarp
 
 
 def background():
@@ -66,8 +70,8 @@ class DetectEggsTests(unittest.TestCase):
         self.assertLessEqual(abs(axes_px[0] - 200) + abs(axes_px[1] - 260), 8)
         self.assertGreater(det.solidity, 0.95)
 
-    def test_blue_and_red_variants_on_both_hue_ends(self):
-        for spot, color in (("blue", "blue"), ("red_low", "red"), ("red_high", "red")):
+    def test_orange_and_red_variants_on_both_hue_ends(self):
+        for spot, color in (("orange", "orange"), ("red_low", "red"), ("red_high", "red")):
             with self.subTest(spot=spot):
                 center, axes = (300, 240), (120, 90)
                 detections = detect_eggs(draw_egg(background(), center, axes, spot))
@@ -156,9 +160,12 @@ class DetectEggsTests(unittest.TestCase):
         cv2.circle(frame, (340, 345), 15, SPOT_BGR["green"], -1)
         cv2.circle(frame, (120, 440), 20, SPOT_BGR["green"], -1)  # spot alone
         cv2.circle(frame, (560, 440), 4, SPOT_BGR["green"], -1)  # speck
+        # the window (spots +- 2 d) clips the big white shape, so its sparse spot is what fails; with
+        # the edge stage the lone spot (no white ring) and the speck (too small) are no spots at all
         reasons = sorted(str(candidate.rejected) for candidate in inspect_candidates(frame))
-        # the window (spots +- 2 d) clips the big white shape, so its sparse spot is what fails
-        self.assertEqual(reasons, ["None", "area", "aspect", "spot fraction", "spot size"])
+        self.assertEqual(reasons, ["None", "aspect", "spot fraction"])
+        hsv = sorted(str(candidate.rejected) for candidate in inspect_candidates(frame, HSV))
+        self.assertEqual(hsv, ["None", "area", "aspect", "spot fraction", "spot size"])
 
     def test_scale_sanity_rejects_a_spot_too_big_for_its_egg(self):
         frame = background()
@@ -167,6 +174,29 @@ class DetectEggsTests(unittest.TestCase):
         (candidate,) = inspect_candidates(frame)
         self.assertEqual(candidate.rejected, "scale")
         self.assertLess(candidate.scale, 2.5)
+        self.assertEqual(detect_eggs(frame), ())
+
+    def test_blue_spotted_egg_is_not_reported_as_another_color(self):
+        frame = np.full((HEIGHT, WIDTH, 3), TARP_BGR, dtype=np.uint8)  # blue eggs were dropped 2026-09-24
+        center, axes = (320, 250), (130, 100)
+        cv2.ellipse(frame, center, axes, 0, 0, 360, WHITE, -1)
+        for fx, fy in SPOT_LAYOUT:
+            cv2.circle(frame, (center[0] + int(fx * axes[0]), center[1] + int(fy * axes[1])), axes[1] // 4,
+                       BLUE_SPOT_BGR, -1)
+        self.assertEqual(detect_eggs(frame), ())
+        self.assertEqual(detect_eggs(frame, HSV), ())
+
+    def test_blue_tarp_patch_next_to_a_white_glint_is_nothing(self):
+        frame = np.full((HEIGHT, WIDTH, 3), (110, 60, 30), dtype=np.uint8)  # lighter tarp
+        cv2.circle(frame, (300, 240), 40, TARP_BGR, -1)  # darker, spot-sized tarp patch
+        cv2.ellipse(frame, (380, 240), (35, 60), 0, 0, 360, WHITE, -1)  # glint beside it, not around it
+        self.assertEqual(detect_eggs(frame), ())
+
+    def test_ring_check_rejects_a_spot_without_white_around_it(self):
+        frame = background()
+        cv2.circle(frame, (320, 240), 40, SPOT_BGR["green"], -1)  # green disk on tarp: no white ring
+        cv2.ellipse(frame, (320, 380), (120, 60), 0, 0, 360, WHITE, -1)  # white shape nearby
+        self.assertEqual(inspect_candidates(frame), ())
         self.assertEqual(detect_eggs(frame), ())
 
     def test_edge_spot_stage_finds_the_same_egg(self):

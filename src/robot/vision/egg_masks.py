@@ -34,8 +34,13 @@ from robot.vision.config_vision import (
     EGG_MIN_SPOT_FRACTION,
     EGG_MIN_SPOTS,
     EGG_OPEN_SPOT_FACTOR,
+    EGG_RING_SCALES,
+    EGG_RING_WHITE_FRACTION,
+    EGG_RING_WHITE_HSV,
     EGG_REPAIR_KERNEL_FRACTION,
     EGG_SCALE_RANGE,
+    EGG_SPOT_BLOB_MAX_FACTOR,
+    EGG_SPOT_BLOB_MIN_EXTENT,
     EGG_SPOT_CLUSTER_FACTOR,
     EGG_SPOT_DETECTOR,
     EGG_SPOT_HSV,
@@ -49,7 +54,7 @@ HsvRange = tuple[tuple[int, int, int], tuple[int, int, int]]
 class DetectorParams:
     """All detector thresholds; the defaults come from config_vision.py."""
 
-    body_hsv: HsvRange = EGG_BODY_HSV
+    body_hsv: tuple[HsvRange, ...] = EGG_BODY_HSV
     spot_hsv: Mapping[str, tuple[HsvRange, ...]] = field(default_factory=lambda: EGG_SPOT_HSV)
     basket_hsv: tuple[HsvRange, ...] = BASKET_HSV
     # Per spot color, the basket ranges to subtract instead of all of basket_hsv (red: only the
@@ -58,6 +63,9 @@ class DetectorParams:
         default_factory=lambda: {"red": BASKET_EXCLUDED_FROM_RED})
     spot_detector: str = EGG_SPOT_DETECTOR  # "hsv" or "edge"
     edge_spot_min_fill: float = EGG_EDGE_SPOT_MIN_FILL
+    ring_white_hsv: tuple[HsvRange, ...] = EGG_RING_WHITE_HSV
+    ring_scales: tuple[float, float] = EGG_RING_SCALES
+    ring_white_fraction: float = EGG_RING_WHITE_FRACTION
     min_spot_area_px: int = EGG_MIN_SPOT_AREA_PX
     min_spot_diameter_px: float = EGG_MIN_SPOT_DIAMETER_PX
     spot_cluster_factor: float = EGG_SPOT_CLUSTER_FACTOR
@@ -65,6 +73,8 @@ class DetectorParams:
     window_factor: float = EGG_WINDOW_FACTOR
     close_kernel_px: int = EGG_CLOSE_KERNEL_PX
     open_spot_factor: float = EGG_OPEN_SPOT_FACTOR
+    spot_blob_max_factor: float = EGG_SPOT_BLOB_MAX_FACTOR
+    spot_blob_min_extent: float = EGG_SPOT_BLOB_MIN_EXTENT
     repair_kernel_fraction: float = EGG_REPAIR_KERNEL_FRACTION
     min_area_px: int = EGG_MIN_AREA_PX
     aspect_range: tuple[float, float] = EGG_ASPECT_RANGE
@@ -81,10 +91,13 @@ DEFAULT_PARAMS = DetectorParams()
 
 @dataclass(frozen=True)
 class FrameMasks:
-    """Basket-free masks of one frame: the white body and one spot mask per color (0/255)."""
+    """Basket-free masks of one frame (0/255): the white body, the spot-stage masks per color (HSV
+    color masks, or the accepted spot interiors with the edge stage), and the HSV color masks."""
 
     body: Any
     spots: Mapping[str, Any]
+    colors: Mapping[str, Any]
+    hsv: Any = None  # the frame in HSV, reused by the edge spot stage
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -114,24 +127,29 @@ class SpotCluster:
     box: tuple[int, int, int, int]
 
 
-def _in_ranges(cv2: Any, hsv: Any, ranges: tuple[HsvRange, ...]) -> Any:
+def in_ranges(cv2: Any, hsv: Any, ranges: tuple[HsvRange, ...]) -> Any:
     masks = [cv2.inRange(hsv, np.array(low, dtype=np.uint8), np.array(high, dtype=np.uint8)) for low, high in ranges]
-    return np.bitwise_or.reduce(masks) if masks else np.zeros(hsv.shape[:2], dtype=np.uint8)
+    if not masks:
+        return np.zeros(hsv.shape[:2], dtype=np.uint8)
+    combined = masks[0]
+    for mask in masks[1:]:
+        combined = cv2.bitwise_or(combined, mask)  # much faster than np.bitwise_or.reduce here
+    return combined
 
 
 def _not_basket_for(cv2: Any, hsv: Any, color: str, not_basket: Any, params: DetectorParams) -> Any:
     ranges = params.basket_for_spot.get(color)
-    return not_basket if ranges is None else cv2.bitwise_not(_in_ranges(cv2, hsv, ranges))
+    return not_basket if ranges is None else cv2.bitwise_not(in_ranges(cv2, hsv, ranges))
 
 
 def frame_masks(cv2: Any, frame: Any, params: DetectorParams) -> FrameMasks:
     """HSV thresholds with the pink basket removed from the body and every spot mask (for red only
     the basket ranges that do not overlap the red spots)."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    not_basket = cv2.bitwise_not(_in_ranges(cv2, hsv, params.basket_hsv))
-    spots = {color: _in_ranges(cv2, hsv, ranges) & _not_basket_for(cv2, hsv, color, not_basket, params)
+    not_basket = cv2.bitwise_not(in_ranges(cv2, hsv, params.basket_hsv))
+    spots = {color: in_ranges(cv2, hsv, ranges) & _not_basket_for(cv2, hsv, color, not_basket, params)
              for color, ranges in params.spot_hsv.items()}
-    return FrameMasks(body=_in_ranges(cv2, hsv, (params.body_hsv,)) & not_basket, spots=spots)
+    return FrameMasks(body=in_ranges(cv2, hsv, params.body_hsv) & not_basket, spots=spots, colors=spots, hsv=hsv)
 
 
 def spot_blobs(cv2: Any, masks: FrameMasks, params: DetectorParams) -> tuple[SpotBlob, ...]:

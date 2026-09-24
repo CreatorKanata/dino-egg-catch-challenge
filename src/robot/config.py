@@ -198,12 +198,12 @@ RERUN_SESSION_NAME: Final = "dino_drive_mode"
 # The egg detector's HSV ranges and segmentation tunables live in robot/vision/config_vision.py
 # (moved to keep this file under 300 lines); the alignment and precondition values stay here.
 # Best position (pick policy start pose), normalized bbox; the controller uses cx and h, w only draws
-# the guide. = the spot-anchored detector's measurement (cx 0.489, cy 0.525, w 0.619, h 0.600) of
+# the guide. = the edge-spot detector's measurement (cx 0.489, cy 0.529, w 0.619, h 0.608) of
 # capture 20260924-220742, taken by the owner at the best position on 2026-09-24; re-capture if needed.
 ALIGN_TARGET_CX: Final = 0.49
 ALIGN_TARGET_CY: Final = 0.53
 ALIGN_TARGET_W: Final = 0.62
-ALIGN_TARGET_H: Final = 0.60
+ALIGN_TARGET_H: Final = 0.61
 ALIGN_TOL_CX: Final = 0.05
 # Height window is asymmetric (owner 2026-09-24: a "done" egg sat too far; closer is fine, farther
 # is not): aligned while target_h - TOL_H_FAR <= h <= target_h + TOL_H_NEAR.

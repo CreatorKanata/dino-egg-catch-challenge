@@ -58,7 +58,7 @@ If the path is not under `~/lerobot-dino-egg-catch-challenge`, run `pip install 
 
   On the Mac this was done in the conda env `lerobot312` on 2026-09-24 with `pip install -e ".[lekiwi,viz]"` inside the fork (plus pyserial and pygame-ce); `python -c "import lerobot; print(lerobot.__file__)"` there prints a path under `lerobot-dino-egg-catch-challenge` (verified).
 
-- OpenCV contrib (owner-approved, 2026-09-24): the `lerobot312` env has `opencv-contrib-python-headless==4.13.0.92` instead of the `opencv-python-headless` that LeRobot pulls. Both wheels install the same `cv2` module, so the contrib wheel must replace the plain one in the same env; it adds `cv2.ximgproc` (EdgeDrawing) for the egg detector's optional "edge" spot stage, and LeRobot still imports. `pyproject.toml` lists it for the `uv` setup.
+- OpenCV contrib (owner-approved, 2026-09-24): the `lerobot312` env has `opencv-contrib-python-headless==4.13.0.92` instead of the `opencv-python-headless` that LeRobot pulls. Both wheels install the same `cv2` module, so the contrib wheel must replace the plain one in the same env; it adds `cv2.ximgproc` (EdgeDrawing) for the egg detector's default "edge" spot stage (it falls back to "hsv" without it), and LeRobot still imports. `pyproject.toml` lists it for the `uv` setup.
 
 - Calibration files are read from `~/.cache/huggingface/lerobot/calibration/`. Copy the committed files from the fork root before first use on a new machine:
 
@@ -108,7 +108,7 @@ src/robot/
     egg_size.py              # EggDetection record and the size precondition; pure
     config_vision.py         # egg detector tunables (HSV ranges, spot clustering, shape rules)
     egg_masks.py             # color masks, spot blobs, spot clusters (numpy + cv2 passed in)
-    spot_edges.py            # optional EdgeDrawing spot stage (OpenCV contrib)
+    spot_edges.py            # default spot stage: EdgeDrawing + white ring (OpenCV contrib)
     egg_detector.py          # spot-anchored, scale-adaptive egg segmentation + shape rules (lazy OpenCV)
     frames.py                # Pi front/wrist frames RGB -> BGR right after observe() (numpy)
     top_frame.py             # overhead 1280x720 -> 960x540 once per frame (lazy OpenCV)

@@ -1,16 +1,14 @@
 """src/robot/vision/egg_detector.py: Spot-anchored, scale-adaptive egg detector for the front camera.
 
-Eggs are white ellipsoids with green, blue, or red spots (owner decision, 2026-09-24). The white
-alone is not enough: under strong light, glints on the tarp wrinkles are just as white (robot run
-2026-09-24, capture 20260924-223853). So the spots anchor the search (egg_masks.py): spot blobs
-are clustered by proximity, and each cluster's median spot diameter d sets the scale. Inside a
-window around the cluster, the basket-free body OR the cluster's own spot color is closed
-(bridging the shell's crack) and opened with a kernel of about d / 2, which removes glints
-thinner than half a spot. The
-component holding the cluster's spots is then gap-repaired and must pass the shape rules: area,
-bbox aspect, scale (bbox height / d), solidity, ellipse fill (away from the frame border), and
-enough spot pixels (count and fraction of the egg area).
-The color with the most spot pixels inside names the egg. OpenCV is imported lazily.
+Eggs are white ellipsoids with green, red, or orange spots (owner decisions, 2026-09-24). White
+alone is not enough (tarp glints under strong light are as white, capture 20260924-223853), so the
+spots anchor the search: spot blobs (spot_edges.py or egg_masks.py) are clustered, and each
+cluster's median spot diameter d sets the scale. In a window around the cluster, the body OR the
+cluster's spot color is closed (the shell's crack) and opened with ~d / 2 (glints thinner than
+half a spot); the component holding the spots, completed by missed spots, is gap-repaired and must
+pass area, aspect, scale, solidity, ellipse fill (off the border), and spot count and fraction.
+The color with the most spot pixels names the egg; best_egg is the largest (nearest) egg.
+OpenCV is imported lazily.
 """
 
 from dataclasses import dataclass, replace
@@ -97,8 +95,9 @@ def _segment(cv2: Any, masks: FrameMasks, cluster: SpotCluster, window: tuple[in
     """
     wx, wy, ww, wh = window
     colors = {spot.color for spot in cluster.core}  # one color per cluster: other colors stay out
-    full = np.bitwise_or.reduce([masks.body[wy:wy + wh, wx:wx + ww],
-                                 *(masks.spots[color][wy:wy + wh, wx:wx + ww] for color in sorted(colors))])
+    full = masks.body[wy:wy + wh, wx:wx + ww]
+    for color in sorted(colors):
+        full = cv2.bitwise_or(full, masks.spots[color][wy:wy + wh, wx:wx + ww])
     open_px = params.open_spot_factor * cluster.d_med
     scale = max(1, math.ceil(open_px / KERNEL_MAX_PX))
     small = cv2.resize(full, (max(1, ww // scale), max(1, wh // scale)), interpolation=cv2.INTER_NEAREST)
@@ -113,7 +112,31 @@ def _segment(cv2: Any, masks: FrameMasks, cluster: SpotCluster, window: tuple[in
     if best[0] == 0:
         return None
     chosen = cv2.resize((labels == best[1]).astype(np.uint8), (ww, wh), interpolation=cv2.INTER_NEAREST)
-    return (chosen > 0) & (full > 0)
+    component = (chosen > 0) & (full > 0)
+    return component | _missed_spots(cv2, masks, component, cluster, window, params)
+
+
+def _missed_spots(cv2: Any, masks: FrameMasks, component: Any, cluster: SpotCluster,
+                  window: tuple[int, int, int, int], params: DetectorParams) -> Any:
+    """Spots the spot stage missed: HSV pixels of the cluster's color inside the component's convex
+    hull, plus whole spot-sized, compact color blobs touching the hull (spots on the egg's edge,
+    which the hull chord would cut). Tarp of the same color is larger than a spot and stays out."""
+    wx, wy, ww, wh = window
+    outlines, _ = cv2.findContours(component.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    hull = np.zeros((wh, ww), dtype=np.uint8)
+    if outlines:
+        cv2.fillConvexPoly(hull, cv2.convexHull(np.concatenate(outlines)), 1)
+    colors = sorted({spot.color for spot in cluster.core})
+    color = masks.colors[colors[0]][wy:wy + wh, wx:wx + ww] > 0  # one spot color per cluster
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(color.astype(np.uint8), connectivity=8)
+    max_area = params.spot_blob_max_factor * math.pi / 4 * cluster.d_med ** 2
+    touching = np.unique(labels[(hull > 0) & color])
+    small = [label for label in touching if label and stats[label, cv2.CC_STAT_AREA] <= max_area
+             and stats[label, cv2.CC_STAT_AREA] >= params.spot_blob_min_extent
+             * stats[label, cv2.CC_STAT_WIDTH] * stats[label, cv2.CC_STAT_HEIGHT]]
+    keep = np.zeros(count, dtype=bool)
+    keep[small] = True
+    return (color & (hull > 0)) | keep[labels]
 
 
 def _repaired(cv2: Any, component: Any, params: DetectorParams) -> tuple[Any, Any]:
@@ -166,10 +189,15 @@ def _rejection(candidate: Candidate, params: DetectorParams, shaped: bool) -> st
 
 
 def _spot_counts(cv2: Any, masks: FrameMasks, inside: Any, window: tuple[int, int, int, int],
-                 params: DetectorParams) -> tuple[tuple[str, int, int], ...]:
+                 params: DetectorParams, cluster_colors: set[str]) -> tuple[tuple[str, int, int], ...]:
+    """(color, spot blobs, spot pixels) inside the egg from the HSV color masks, so spots the spot
+    stage missed count too; only the cluster's own color is counted (others are 0)."""
     wx, wy, ww, wh = window
     counts = []
-    for color, mask in masks.spots.items():
+    for color, mask in masks.colors.items():
+        if color not in cluster_colors:
+            counts.append((color, 0, 0))
+            continue
         blob_mask = ((mask[wy:wy + wh, wx:wx + ww] > 0) & inside).astype(np.uint8)
         total, _, stats, _ = cv2.connectedComponentsWithStats(blob_mask, connectivity=8)
         kept = [int(stats[index, cv2.CC_STAT_AREA]) for index in range(1, total)
@@ -199,7 +227,7 @@ def _candidate(cv2: Any, masks: FrameMasks, cluster: SpotCluster, params: Detect
     outline, inside = _repaired(cv2, component, params)
     solidity, fill, ellipse = _shape(cv2, outline + np.array([wx, wy], dtype=np.int32), touches)
     shaped = replace(measured, solidity=solidity, fill=fill, ellipse=ellipse,
-                     spots=_spot_counts(cv2, masks, inside, window, params))
+                     spots=_spot_counts(cv2, masks, inside, window, params, {spot.color for spot in cluster.core}))
     return replace(shaped, rejected=_rejection(shaped, params, shaped=True))
 
 
@@ -218,15 +246,17 @@ def _frame(frame_bgr: Any) -> Any:
     return frame
 
 
-def _spots(cv2: Any, frame: Any, masks: FrameMasks, params: DetectorParams) -> tuple[SpotBlob, ...]:
-    """The configured spot stage; "edge" falls back to "hsv" without cv2.ximgproc."""
+def _spots(cv2: Any, frame: Any, masks: FrameMasks, params: DetectorParams) -> tuple[FrameMasks, tuple[SpotBlob, ...]]:
+    """The configured spot stage. "edge" also replaces the spot masks with the accepted spot
+    interiors (so tarp of a spot's color never joins an egg); it falls back to "hsv" without
+    cv2.ximgproc."""
     if params.spot_detector == "edge":
-        blobs = edge_spot_blobs(cv2, frame, masks, params)
-        if blobs is not None:
-            return blobs
+        found = edge_spot_blobs(cv2, frame, masks, params)
+        if found is not None:
+            return replace(masks, spots=found.interiors), found.blobs
     elif params.spot_detector != "hsv":
         raise ValueError(f"Unknown spot detector: {params.spot_detector!r}")
-    return spot_blobs(cv2, masks, params)
+    return masks, spot_blobs(cv2, masks, params)
 
 
 def inspect_candidates(frame_bgr: Any, params: DetectorParams = DEFAULT_PARAMS) -> tuple[Candidate, ...]:
@@ -234,7 +264,8 @@ def inspect_candidates(frame_bgr: Any, params: DetectorParams = DEFAULT_PARAMS) 
     cv2 = _cv2()
     frame = _frame(frame_bgr)
     masks = frame_masks(cv2, frame, params)
-    clusters = cluster_spots(_spots(cv2, frame, masks, params), params.spot_cluster_factor, params.core_spot_factor)
+    masks, blobs = _spots(cv2, frame, masks, params)
+    clusters = cluster_spots(blobs, params.spot_cluster_factor, params.core_spot_factor)
     return tuple(_candidate(cv2, masks, cluster, params) for cluster in clusters)
 
 

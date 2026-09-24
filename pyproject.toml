@@ -1,7 +1,7 @@
 # pyproject.toml: Repository-root Python project for the attendee-facing application.
 # Declares the LeRobot fork (LeKiwi client + Rerun viewer) and pyserial for the
 # dino-controller so `uv` can build one environment; the app is not packaged.
-# The egg detector's optional "edge" spot stage needs OpenCV contrib (cv2.ximgproc). LeRobot pulls
+# The egg detector's default "edge" spot stage needs OpenCV contrib (cv2.ximgproc). LeRobot pulls
 # opencv-python-headless, which provides the same `cv2` module: the contrib package must replace it
 # in the same environment (uninstall opencv-python-headless, keep only the contrib wheel).
 
