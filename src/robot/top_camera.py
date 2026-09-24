@@ -1,4 +1,4 @@
-"""src/robot/top_camera.py: Overhead camera on the Mac for the Drive Mode view.
+"""src/robot/top_camera.py: Overhead camera on the Mac for the Manual Mode view.
 
 Thin wrapper around LeRobot's OpenCVCamera. The camera is opened by the application, not
 declared in LeKiwiClientConfig.cameras (that field is for cameras streamed by the Pi).

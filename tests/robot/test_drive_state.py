@@ -1,8 +1,8 @@
-"""tests/robot/test_drive_state.py: Hardware-free checks of Drive Mode state and action selection.
+"""tests/robot/test_drive_state.py: Hardware-free checks of Manual Mode driving state and action selection.
 
 Covers the owner-decided roles (joystick translation, encoder rotation budget consumed at the
-level's theta speed), the fixed speed level, and the Catch and input-lost stops that also
-clear any pending rotation.
+level's theta speed, shaft button without a role), the fixed speed level, and the input-lost
+stop and the optional Catch role, both of which clear any pending rotation.
 """
 
 from dataclasses import replace
@@ -19,8 +19,11 @@ from robot.config import (
     ENCODER_ROTATION_SCALE,
     LEFT_RIGHT_ROLE,
     LOOP_HZ,
+    ROLE_CATCH,
+    ROLE_NONE,
     ROLE_ROTATE_BASE,
     ROLE_SPEED,
+    SHAFT_BUTTON_ROLE,
     SPEED_LEVELS,
 )
 from robot.controller_to_action import stop_action
@@ -64,12 +67,21 @@ class DriveStateTests(unittest.TestCase):
         update(drive, delta=CW)
         self.assertEqual(drive, DriveState())
 
+    def test_shaft_button_has_no_role_by_default(self):
+        self.assertEqual(SHAFT_BUTTON_ROLE, ROLE_NONE)
+        pressed = replace(FORWARD, button=True)
+        rotating = update(controller=FORWARD, delta=CCW)
+        drive = update(rotating, pressed)
+        self.assertFalse(drive.catch_requested)
+        self.assertEqual(drive.pending_rotation_deg, rotating.pending_rotation_deg)
+        self.assertAlmostEqual(act(drive, pressed)["x.vel"], 0.1)
+
     def test_catch_request_stops_base(self):
         controller = replace(FORWARD, button=True)
-        drive = update(controller=controller)
+        drive = update(controller=controller, shaft_button_role=ROLE_CATCH)
         self.assertTrue(drive.catch_requested)
         self.assertEqual(act(drive, controller), stop_action())
-        released = update(drive, FORWARD)
+        released = update(drive, FORWARD, shaft_button_role=ROLE_CATCH)
         self.assertFalse(released.catch_requested)
         self.assertAlmostEqual(act(released, FORWARD)["x.vel"], 0.1)
 
@@ -169,7 +181,7 @@ class EncoderRotationTests(unittest.TestCase):
     def test_catch_clears_pending_and_zeros(self):
         rotating = update(controller=FORWARD, delta=CCW)
         pressed = replace(FORWARD, button=True)
-        drive = update(rotating, pressed)
+        drive = update(rotating, pressed, shaft_button_role=ROLE_CATCH)
         self.assertEqual(drive.pending_rotation_deg, 0.0)
         self.assertEqual(act(drive, pressed), stop_action())
         self.assertEqual(act(update(drive, FORWARD), FORWARD)["theta.vel"], 0.0)

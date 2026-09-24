@@ -1,4 +1,4 @@
-"""src/robot/config.py: Central runtime tunables for Drive Mode teleoperation.
+"""src/robot/config.py: Central runtime tunables for Manual Mode teleoperation.
 
 Every address, port, rate, speed level, and input-role choice used by src/robot lives here,
 as required by AGENTS.md. Values come from docs/lekiwi-app-development.md and the
@@ -49,11 +49,12 @@ TOP_CAMERA_FPS: Final = 30
 # decodes with cv2.imdecode (BGR), so all three Rerun panels share one channel order.
 TOP_CAMERA_COLOR_MODE: Final = "bgr"
 
-# --- Arm during Drive Mode ------------------------------------------------------------------
+# --- Arm during Manual Mode -----------------------------------------------------------------
 # The fork's host writes Goal_Position for every action and fails on an empty arm key set, so
 # every action carries all six arm keys. The host enables torque and position mode on connect,
-# so holding the pose observed at startup keeps the arm where it already is. This replaces the
-# previous "send nothing" default; arm keys are never derived from controller input.
+# so the pose observed at startup is held until the leader arm is engaged (arm_follow.py); the
+# last commanded pose is held whenever the leader is absent, faulty, or ignored (FSC, Stop).
+# Arm keys are never derived from controller input.
 ArmMode = Literal["hold_initial_pose"]
 ARM_MODE: ArmMode = "hold_initial_pose"
 ARM_KEYS: Final = (
@@ -64,6 +65,20 @@ ARM_KEYS: Final = (
     "arm_wrist_roll.pos",
     "arm_gripper.pos",
 )
+# The leader arm (SO100Leader.get_action) reports the same joints without the `arm_` prefix.
+LEADER_KEYS: Final = tuple(key.removeprefix("arm_") for key in ARM_KEYS)
+
+# --- Leader arm on the Mac (Manual Mode puppeteering) -------------------------------------
+# Verified values from docs/lekiwi-app-development.md (working session 2026-09-24). The
+# calibration file dino_leader_arm.json lives in
+# ~/.cache/huggingface/lerobot/calibration/teleoperators/so_leader/.
+LEADER_ARM_PORT: Final = "/dev/tty.usbmodem5A7A0179021"
+LEADER_ARM_ID: Final = "dino_leader_arm"
+# Slow engagement (owner decision: approach slowly, then follow in real time). The numbers are
+# proposals to tune on the robot, not measurements. Joint keys are in degrees; the gripper key
+# is in percent, and the same numeric rate/tolerance is applied to it (percent per second).
+ARM_ENGAGE_SPEED_DEG_S: Final = 30.0
+ARM_ENGAGE_TOLERANCE_DEG: Final = 3.0
 
 # --- Control loop ----------------------------------------------------------------------------
 LOOP_HZ: Final = 30
@@ -79,20 +94,22 @@ INITIAL_SPEED_INDEX: Final = 0
 # --- Input roles -------------------------------------------------------------------------------
 # Owner decisions (2026-09-24): the joystick translates the base (forward/back/left/right) and
 # the encoder rotates it (cw = right, ccw = left); no input changes the speed level any more.
-# Still defaults pending an owner decision: the shaft-button role (Catch) and ARM_MODE above.
+# The shaft button has no role (docs/spec/operating-modes.md, section 3: Catch moved to `Hi!`,
+# stop is the second KachiButton); it stays wired and reported, reserved for a later use.
 LeftRightRole = Literal["rotate", "strafe"]
 EncoderRole = Literal["speed", "rotate_base"]
-ShaftButtonRole = Literal["catch"]
+ShaftButtonRole = Literal["catch", "none"]
 
 ROLE_ROTATE: Final = "rotate"  # joystick left/right turns the base (theta.vel)
 ROLE_STRAFE: Final = "strafe"  # joystick left/right moves sideways (y.vel)
 ROLE_ROTATE_BASE: Final = "rotate_base"  # encoder cw = rotate right, ccw = rotate left
 ROLE_SPEED: Final = "speed"  # encoder cw = faster level, ccw = slower level (kept available)
-ROLE_CATCH: Final = "catch"  # shaft button requests Catch; the base stops, no arm motion yet
+ROLE_CATCH: Final = "catch"  # shaft button requests Catch; the base stops while held (kept available)
+ROLE_NONE: Final = "none"  # shaft button ignored
 
 LEFT_RIGHT_ROLE: LeftRightRole = ROLE_STRAFE
 ENCODER_ROLE: EncoderRole = ROLE_ROTATE_BASE
-SHAFT_BUTTON_ROLE: ShaftButtonRole = ROLE_CATCH
+SHAFT_BUTTON_ROLE: ShaftButtonRole = ROLE_NONE
 
 # Each click adds a rotation budget (knob angle per click x ENCODER_ROTATION_SCALE) that is
 # spent at the current level's theta speed (open-loop: commanded, not measured).
@@ -144,6 +161,13 @@ SIGNBOARD_PROTOCOL_VERSION: Final = 1
 SIGNBOARD_CHILD_POLL_S: Final = 0.05  # child waits this long for a packet before pumping events
 SIGNBOARD_CHILD_EXIT_TIMEOUT_S: Final = 2.0  # parent waits this long for the child to exit
 
+# --- KachiButton phrases (typed into the focused signboard window; docs/spec/operating-modes.md) --
+# (typed phrase, command). Matching is exact and case-sensitive, including spaces and "!".
+KACHI_PHRASES: Final = (("Go Go!", "mode_toggle"), ("Hi!", "hi"), ("Thx", "thx"), ("Stop", "stop"))
+KACHI_PHRASE_GAP_S: Final = 1.0  # characters further apart than this never form one phrase
+KACHI_BUFFER_MAX: Final = 32  # trailing characters kept while waiting for a phrase to complete
+NOTICE_SECONDS: Final = 3.0  # how long a signboard notice ("STOP", "not available yet") stays
+
 # --- Operator visualization (Rerun, opt-in) ------------------------------------------------
 RERUN_SESSION_NAME: Final = "dino_drive_mode"
 
@@ -155,3 +179,7 @@ if not (0 < ENCODER_DEGREES_PER_STEP <= ENCODER_MAX_PENDING_DEG):
     raise ValueError("Encoder rotation needs 0 < ENCODER_DEGREES_PER_STEP <= ENCODER_MAX_PENDING_DEG")
 if CONTROLLER_STATE_POLL_INTERVAL_S >= CONTROLLER_INPUT_TIMEOUT_S:
     raise ValueError("CONTROLLER_STATE_POLL_INTERVAL_S must be below CONTROLLER_INPUT_TIMEOUT_S")
+if not (ARM_ENGAGE_SPEED_DEG_S > 0 and ARM_ENGAGE_TOLERANCE_DEG > 0):
+    raise ValueError("ARM_ENGAGE_SPEED_DEG_S and ARM_ENGAGE_TOLERANCE_DEG must be positive")
+if KACHI_BUFFER_MAX < max(len(phrase) for phrase, _ in KACHI_PHRASES):
+    raise ValueError("KACHI_BUFFER_MAX must hold the longest KachiButton phrase")

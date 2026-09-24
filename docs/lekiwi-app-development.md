@@ -1,14 +1,14 @@
 <!-- docs/lekiwi-app-development.md: Explain how application code in this repository uses the LeKiwi robot through the LeRobot fork, and where training work lives instead. -->
 # LeKiwi Application Development Guide
 
-Written: 2026-09-24. Status: verified runtime facts from the working teleoperation session on that date, plus the Drive Mode application layout, which is implemented, unit-tested without hardware, and owner-tested on the robot for controller driving on 2026-09-24. Anything marked *Proposal* or *owner decision pending* describes intent, not tested behavior.
+Written: 2026-09-24. Status: verified runtime facts from the working teleoperation session on that date, plus the Manual Mode (formerly Drive Mode) application layout, which is implemented and unit-tested without hardware; its base-driving half was owner-tested on the robot for controller driving on 2026-09-24. Anything marked *Proposal* or *owner decision pending* describes intent, not tested behavior.
 
 ## 1. Two repositories, two roles
 
 | Repository | Role | What lives there |
 | --- | --- | --- |
 | `../lerobot-dino-egg-catch-challenge` (LeRobot fork, `lerobot` 0.6.2, Python 3.12+) | Robot runtime and learning | LeKiwi host process on the Raspberry Pi, camera/motor configuration, calibration files (`dino_kiwi.json`, `dino_leader_arm.json` in the repository root), dataset recording, ACT/SmolVLA training and evaluation |
-| `dino-egg-catch-challenge` (this repository) | Attendee-facing application | Drive Mode teleoperation with the dino-controller, the three-camera view, and the Gemini Robotics task service described in [dino-egg-catch-challenge-gemini-integration.md](proposals/dino-egg-catch-challenge-gemini-integration.md) |
+| `dino-egg-catch-challenge` (this repository) | Attendee-facing application | Manual Mode teleoperation with the dino-controller and the leader arm, KachiButton controls, the three-camera view, and the Gemini Robotics task service described in [dino-egg-catch-challenge-gemini-integration.md](proposals/dino-egg-catch-challenge-gemini-integration.md) |
 
 Application code here imports LeRobot as a library. Nothing in this repository needs to be added inside the fork. The fork changes only when the robot itself changes: camera devices, motor settings, host timing, or training pipelines.
 
@@ -87,7 +87,7 @@ Do not send the overhead camera through `LeKiwiClientConfig.cameras`. That field
 
 ## 5. Application layout (implemented, unit-tested without hardware)
 
-Following the working agreements (single-purpose modules, 300-line limit, tunables in `config.py`, hardware-independent tests). The operating modes (Manual Mode, Auto Catch, Auto Release, Full Self-Catching (FSC)) and the KachiButton controls are specified in [spec/operating-modes.md](spec/operating-modes.md). Phase 1 is implemented: Manual Mode (the former Drive Mode plus leader-arm puppeteering with slow engagement), the mode manager, KachiButton phrase detection through the signboard, and the mode text on the signboard; Auto Catch, Auto Release, and FSC are display-only stubs that never move the robot. Details, run commands, the KachiButton table, and the input mapping are in [src/robot/README.md](../src/robot/README.md).
+Following the working agreements (single-purpose modules, 300-line limit, tunables in `config.py`, hardware-independent tests). The operating modes (Manual Mode, Auto Catch, Auto Release, Full Self-Catching (FSC)) and the KachiButton controls are specified in [spec/operating-modes.md](spec/operating-modes.md). Phase 1 is implemented: Manual Mode (base driving with the dino-controller plus leader-arm puppeteering with slow engagement), the mode manager, KachiButton phrase detection through the signboard, and the mode text on the signboard; Auto Catch, Auto Release, and FSC are display-only stubs that never move the robot. Details, run commands, the KachiButton table, and the input mapping are in [src/robot/README.md](../src/robot/README.md).
 
 ```
 pyproject.toml               # LeRobot fork [lekiwi,viz] + pyserial + pygame-ce; uv package = false
@@ -140,15 +140,15 @@ The attendee display is a pygame signboard window (owner decision, 2026-09-24); 
 | Rotary encoder | cw rotates right, ccw rotates left; one click turns the base by half the knob's own angle per click (360° / detents × 0.5; currently assumed 20 detents = 9°), open-loop; the detent count needs the counted test | `ENCODER_ROLE = "rotate_base"`: `ENCODER_DEGREES_PER_STEP = 360 / ENCODER_CLICKS_PER_REVOLUTION * ENCODER_ROTATION_SCALE` (scale 0.5); "Detent calibration" is pending in [dino-controller-validation.md](dino-controller-validation.md). The budget is spent at the level's `theta` speed and capped at `ENCODER_MAX_PENDING_DEG` (360°, a runaway guard to tune on the robot) |
 | Speed level | Not changed by any input | Fixed at `INITIAL_SPEED_INDEX` (slow: 0.1 m/s, 30 deg/s) |
 
-### Defaults chosen in config.py (owner decision pending)
+### Earlier open questions and current config.py defaults
 
 | Question | Options under consideration | Default in `config.py` |
 | --- | --- | --- |
 | Arm during Manual Mode | Superseded by the owner decisions in [spec/operating-modes.md](spec/operating-modes.md): the arm follows the leader arm after a slow engagement | Pose observed at connect held until engagement; last commanded pose held in FSC, after `Stop`, on a leader fault, and with `--no-leader`. `ARM_ENGAGE_SPEED_DEG_S` (30) and `ARM_ENGAGE_TOLERANCE_DEG` (3) are proposals to tune on the robot |
-| Shaft button role | Emergency stop, speed change, or Catch trigger for a later policy hand-off | `SHAFT_BUTTON_ROLE = "catch"`: the base stops while held; no arm motion yet |
+| Shaft button role | Decided in [spec/operating-modes.md](spec/operating-modes.md), section 3: no role (Catch moved to `Hi!`, stop is the second KachiButton) | `SHAFT_BUTTON_ROLE = "none"`: reserved, still wired and reported; the former `"catch"` role remains available |
 | Loss of controller input | Send zero velocities immediately; the host watchdog is a backstop, not the primary stop | Zero velocities after 0.5 s without a valid message or while unsynchronized (`CONTROLLER_INPUT_TIMEOUT_S`) |
 
-Input loss and Catch both clear the pending encoder rotation, so the base never resumes turning on its own after a stop.
+Input loss, `Stop` (latched until `Go Go!`), mode switches, and the optional Catch role all clear the pending encoder rotation, so the base never resumes turning on its own after a stop.
 
 ## 6. Recording data and training (done in the fork)
 
@@ -181,6 +181,6 @@ The application later loads the resulting checkpoint through a policy-execution 
 
 Verified on 2026-09-24: host start command, ZMQ ports, action and observation keys, camera configuration, watchdog and connection time, calibration file locations, the stale-checkout pitfall, and the API names listed in section 4.
 
-Implemented, unit-tested without hardware: the module layout in section 5 (controller reader, action mapper, drive state with the encoder rotation budget, adapter action content with a fake client). The joystick, encoder, and speed-level roles are owner decisions (2026-09-24); one click turns the base by half the knob's own angle per click (360° / detents × 0.5; currently assumed 20 detents = 9°), open-loop; the detent count needs the counted test. The hardware modules import and `python -m robot.teleop_drive --help` runs in the `lerobot312` environment. Owner-tested on the robot (2026-09-24): driving the base with the dino-controller works as reported by the owner; the rotation angle per click, the overhead camera, and the on-screen signboard were not separately reported.
+Implemented, unit-tested without hardware: the Manual Mode module layout in section 5 (controller reader, action mapper, drive state with the encoder rotation budget, adapter action content with a fake client, KachiButton phrase detection, the mode manager with the Stop latch, leader-arm slow engagement and following with a fake teleoperator, and the signboard command channel). The leader arm, the KachiButton in a real window, and `Stop` have not been tested on the robot. The joystick, encoder, and speed-level roles are owner decisions (2026-09-24); one click turns the base by half the knob's own angle per click (360° / detents × 0.5; currently assumed 20 detents = 9°), open-loop; the detent count needs the counted test. The hardware modules import and `python -m robot.teleop_drive --help` runs in the `lerobot312` environment. Owner-tested on the robot (2026-09-24): driving the base with the dino-controller (Manual Mode's base-driving half) works as reported by the owner; the rotation angle per click, the overhead camera, and the on-screen signboard were not separately reported.
 
-Assumed or proposed: the button and arm-hold roles (defaults pending owner decision), the encoder detent count (20 assumed) and rotation cap, the empty-arm-action failure (code reading only), the recording command's dataset arguments, and every statement about policy execution. Update this document when those become implementation.
+Assumed or proposed: the engagement speed and tolerance, the encoder detent count (20 assumed) and rotation cap, the empty-arm-action failure (code reading only), the recording command's dataset arguments, and every statement about policy execution. Update this document when those become implementation.

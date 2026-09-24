@@ -1,8 +1,9 @@
 """tests/robot/test_signboard_client.py: Checks of the out-of-process signboard and its isolation.
 
-Runs fake and real signboard children through SignboardClient, and verifies in fresh
-interpreters that the parent never loads pygame and the child never loads lerobot or cv2,
-the SDL2 separation this design exists for. The real child uses SDL's dummy video driver.
+Runs fake and real signboard children through SignboardClient (packets in, KachiButton
+command lines out), and verifies in fresh interpreters that the parent never loads pygame and
+the child never loads lerobot or cv2, the SDL2 separation this design exists for. The real
+child uses SDL's dummy video driver.
 """
 
 from dataclasses import replace
@@ -17,6 +18,7 @@ import unittest
 import numpy as np
 
 from robot.dino_controller_reader import INITIAL_STATE
+from robot.display_status import DisplayStatus
 from robot.drive_state import DriveState
 from robot.signboard_client import SignboardClient
 
@@ -31,7 +33,18 @@ FAKE_CHILD = (
     "    if packet is None or isinstance(packet, CloseRequest):\n"
     "        sys.exit(0)\n"
 )
+COMMAND_CHILD = (
+    "import sys\n"
+    "from robot.signboard_protocol import CloseRequest, encode_command, read_packet\n"
+    "sys.stdout.buffer.write(b'not json\\n' + encode_command('stop') + encode_command('hi'))\n"
+    "sys.stdout.buffer.flush()\n"
+    "while True:\n"
+    "    packet = read_packet(sys.stdin.buffer)\n"
+    "    if packet is None or isinstance(packet, CloseRequest):\n"
+    "        sys.exit(0)\n"
+)
 HEADLESS_ENV = {**os.environ, "SDL_VIDEODRIVER": "dummy"}
+STATUS = DisplayStatus(mode="fsc", notice="FSC", arm_status="holding")
 
 
 def frames(fill=0):
@@ -63,6 +76,22 @@ class SignboardClientTests(unittest.TestCase):
         self.assertEqual(client.returncode, 0)
         self.assertFalse(client.pump())
         client.close()  # idempotent
+
+    def test_commands_from_child_are_polled_and_malformed_lines_dropped(self):
+        client = SignboardClient(command=[sys.executable, "-c", COMMAND_CHILD])
+        client.open()
+        self.addCleanup(client.close)
+        client.render(frames(1), DRIVE, CONTROLLER, STATUS)
+        received = []
+        self.assertTrue(wait_until(lambda: received.extend(client.poll_commands()) or len(received) >= 2))
+        self.assertEqual(received, ["stop", "hi"])
+        self.assertEqual(client.poll_commands(), ())
+        client.close()
+        self.assertEqual(client.returncode, 0)
+        self.assertFalse(client._reader.is_alive())
+
+    def test_poll_commands_before_open_is_empty(self):
+        self.assertEqual(SignboardClient(command=[sys.executable, "-c", FAKE_CHILD]).poll_commands(), ())
 
     def test_dead_child_is_reported_without_raising(self):
         client = SignboardClient(command=[sys.executable, "-c", "import sys; sys.exit(0)"])
@@ -105,9 +134,10 @@ class HeadlessEndToEndTests(unittest.TestCase):
         client.open()
         self.addCleanup(client.close)
         for fill in (10, 120, 250):
-            client.render(frames(fill), DRIVE, CONTROLLER)
+            client.render(frames(fill), DRIVE, CONTROLLER, STATUS)
             time.sleep(0.05)
         self.assertTrue(client.pump())
+        self.assertEqual(client.poll_commands(), ())  # nothing typed, nothing on stdout
         client.close()
         self.assertEqual(client.returncode, 0)
 

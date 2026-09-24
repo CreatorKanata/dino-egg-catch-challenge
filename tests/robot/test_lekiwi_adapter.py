@@ -94,6 +94,25 @@ class AdapterTests(unittest.TestCase):
         self.assertFalse(client.is_connected)
         self.assertEqual(client.sent[-1], {**POSE, "x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0})
 
+    def test_send_with_arm_pose_updates_the_held_pose(self):
+        client = FakeClient()
+        adapter = make_adapter(client)
+        adapter.connect()
+        startup = adapter.arm_hold
+        leader = {key: value + 10.0 for key, value in POSE.items()}
+        adapter.send_action({"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}, {**leader, "extra.pos": 1.0})
+        self.assertEqual({key: client.sent[-1][key] for key in ARM_KEYS}, leader)
+        self.assertEqual(adapter.arm_hold, leader)
+        self.assertEqual(startup, POSE)  # reassigned, not mutated
+        adapter.send_action({"x.vel": 0.1, "y.vel": 0.0, "theta.vel": 0.0})  # None -> repeat held pose
+        self.assertEqual({key: client.sent[-1][key] for key in ARM_KEYS}, leader)
+        adapter.stop()
+        self.assertEqual(client.sent[-1], {**leader, "x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0})
+
+    def test_send_with_arm_pose_before_connect_raises(self):
+        with self.assertRaises(RuntimeError):
+            make_adapter(FakeClient()).send_action({"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}, POSE)
+
     def test_stop_and_disconnect_are_safe_when_not_connected(self):
         client = FakeClient()
         adapter = make_adapter(client)

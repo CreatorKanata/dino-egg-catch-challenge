@@ -1,9 +1,10 @@
-"""src/robot/signboard_protocol.py: Pipe format between Drive Mode and the signboard process.
+"""src/robot/signboard_protocol.py: Pipe formats between Manual Mode and the signboard process.
 
-Each packet is one UTF-8 JSON header line followed by the raw HWC uint8 BGR bytes of every
-frame that has a signal, in header order. The signboard runs in its own interpreter (opencv
-and pygame each bundle SDL2 on macOS), so this module uses only the stdlib and numpy and is
-safe to import on both sides.
+Parent -> child (stdin): each packet is one UTF-8 JSON header line (drive, controller, mode
+status, frame sizes) followed by the raw HWC uint8 BGR bytes of every frame that has a signal,
+in header order. Child -> parent (stdout): one JSON line per KachiButton command. The signboard
+runs in its own interpreter (opencv and pygame each bundle SDL2 on macOS), so this module uses
+only the stdlib and numpy and is safe to import on both sides.
 """
 
 from dataclasses import dataclass
@@ -15,7 +16,9 @@ import numpy as np
 
 from robot.config import SIGNBOARD_PROTOCOL_VERSION
 from robot.dino_controller_reader import ControllerState
+from robot.display_status import ARM_STATUSES, DisplayStatus
 from robot.drive_state import DriveState
+from robot.mode_manager import ACTIONS, MODES
 
 # Protocol bounds (not tunables): a header is a few hundred bytes; frames are camera-sized.
 HEADER_MAX_BYTES = 64 * 1024
@@ -23,6 +26,10 @@ FRAME_SIDE_MAX = 8192
 CHANNELS = 3
 DRIVE_FIELDS = ("speed_index", "catch_requested", "input_lost", "pending_rotation_deg")
 CONTROLLER_FIELDS = ("up", "down", "left", "right", "button", "synchronized")
+STATUS_FIELDS = ("mode", "action", "voice_listening", "notice", "arm_status", "stopped")
+NOTICE_MAX_CHARS = 200
+COMMAND_MAX_CHARS = 64
+COMMAND_LINE_MAX_BYTES = 1024
 
 
 @dataclass(frozen=True)
@@ -41,6 +48,7 @@ class DisplayPacket:
     drive: DriveState
     controller: ControllerState
     frames: tuple[tuple[str, Any | None], ...]
+    status: DisplayStatus = DisplayStatus()
 
 
 @dataclass(frozen=True)
@@ -68,12 +76,30 @@ def encode(packet: DisplayPacket | CloseRequest) -> bytes:
         "v": SIGNBOARD_PROTOCOL_VERSION,
         "drive": {field: getattr(packet.drive, field) for field in DRIVE_FIELDS},
         "controller": {field: getattr(packet.controller, field) for field in CONTROLLER_FIELDS},
+        "status": {field: getattr(packet.status, field) for field in STATUS_FIELDS},
         "frames": [{"name": entry.name, "w": entry.width, "h": entry.height} for entry, _ in encoded],
     }
     return json.dumps(header).encode("utf-8") + b"\n" + b"".join(body for _, body in encoded)
 
 
 CLOSE_MESSAGE = encode(CloseRequest())
+
+
+def encode_command(command: str) -> bytes:
+    """One child -> parent line announcing a KachiButton command."""
+    header = {"v": SIGNBOARD_PROTOCOL_VERSION, "type": "command", "command": command}
+    return json.dumps(header).encode("utf-8") + b"\n"
+
+
+def parse_command_line(line: bytes) -> str | None:
+    """The command in one child -> parent line, or None when the line is malformed."""
+    header = _parse_header(line)
+    if header is None or header.get("type") != "command":
+        return None
+    command = header.get("command")
+    if not isinstance(command, str) or not 0 < len(command) <= COMMAND_MAX_CHARS:
+        return None
+    return command
 
 
 def _is_int(value: Any) -> bool:
@@ -95,6 +121,21 @@ def _controller(fields: Any) -> ControllerState | None:
     if not isinstance(fields, dict) or not all(type(fields.get(key)) is bool for key in CONTROLLER_FIELDS):
         return None
     return ControllerState(**{key: fields[key] for key in CONTROLLER_FIELDS})
+
+
+def _status(fields: Any) -> DisplayStatus | None:
+    if not isinstance(fields, dict):
+        return None
+    if not all(type(fields.get(key)) is bool for key in ("voice_listening", "stopped")):
+        return None
+    notice = fields.get("notice")
+    if not isinstance(notice, str) or len(notice) > NOTICE_MAX_CHARS:
+        return None
+    if fields.get("mode") not in MODES or fields.get("action") not in ACTIONS:
+        return None
+    if fields.get("arm_status") not in ARM_STATUSES:
+        return None
+    return DisplayStatus(**{key: fields[key] for key in STATUS_FIELDS})
 
 
 def _frame_entry(entry: Any) -> FramePacket | None:
@@ -140,8 +181,8 @@ def read_packet(stream: BinaryIO) -> DisplayPacket | CloseRequest | None:
     if "type" in header:
         return CloseRequest() if header["type"] == "close" else None
     drive, controller = _drive(header.get("drive")), _controller(header.get("controller"))
-    entries = header.get("frames")
-    if drive is None or controller is None or not isinstance(entries, list):
+    status, entries = _status(header.get("status")), header.get("frames")
+    if drive is None or controller is None or status is None or not isinstance(entries, list):
         return None
     frames = []
     for entry in map(_frame_entry, entries):
@@ -154,4 +195,4 @@ def read_packet(stream: BinaryIO) -> DisplayPacket | CloseRequest | None:
                 return None
             frame = np.frombuffer(data, dtype=np.uint8).reshape(entry.height, entry.width, CHANNELS)
         frames.append((entry.name, frame))
-    return DisplayPacket(drive=drive, controller=controller, frames=tuple(frames))
+    return DisplayPacket(drive=drive, controller=controller, frames=tuple(frames), status=status)

@@ -1,9 +1,10 @@
-"""src/robot/lekiwi_adapter.py: LeKiwiClient wrapper for Drive Mode base commands.
+"""src/robot/lekiwi_adapter.py: LeKiwiClient wrapper for Manual Mode base and arm commands.
 
 The fork's host writes Goal_Position on every action and fails when no arm keys are present,
-so each command carries the six arm positions captured at connect plus the three base
-velocities. Arm values are never derived from controller input. Disconnecting always sends
-zero velocities first; the host's 500 ms watchdog is only a backstop.
+so each command carries six arm positions plus the three base velocities. The arm pose is
+captured at connect and replaced by every explicitly commanded pose (leader-arm following);
+otherwise the last pose is repeated. Arm values are never derived from controller input.
+Disconnecting always sends zero velocities first; the host's 500 ms watchdog is only a backstop.
 """
 
 import logging
@@ -46,7 +47,7 @@ def compose_action(base: Mapping[str, float], arm_hold: Mapping[str, float]) -> 
 
 
 class LeKiwiAdapter:
-    """Connect to the LeKiwi host, hold the startup arm pose, and send base velocities."""
+    """Connect to the LeKiwi host, hold the last commanded arm pose, and send base velocities."""
 
     def __init__(
         self,
@@ -76,18 +77,24 @@ class LeKiwiAdapter:
         try:
             self.arm_hold = capture_arm_pose(self._client.get_observation())
         except (KeyError, ValueError):
-            logger.exception("Cannot read the arm pose; Drive Mode will not start")
+            logger.exception("Cannot read the arm pose; Manual Mode will not start")
             raise
         logger.info("Holding arm at startup pose: %s", self.arm_hold)
 
     def observe(self) -> dict[str, Any]:
         return self._client.get_observation()
 
-    def send_action(self, base: Mapping[str, float]) -> None:
-        """Send the base velocities together with the held arm pose."""
+    def send_action(self, base: Mapping[str, float], arm_pose: Mapping[str, float] | None = None) -> None:
+        """Send the base velocities with `arm_pose`, or with the held pose when it is None.
+
+        A given `arm_pose` becomes the new held pose (a new dict; the old one is not mutated),
+        so stop() and later frames repeat the last commanded arm position.
+        """
         if self.arm_hold is None:
             raise RuntimeError("Arm pose is unknown; call connect() first")
-        self._client.send_action(compose_action(base, self.arm_hold))
+        pose = self.arm_hold if arm_pose is None else {key: float(arm_pose[key]) for key in ARM_KEYS}
+        self._client.send_action(compose_action(base, pose))
+        self.arm_hold = pose
 
     def stop(self) -> None:
         """Send zero base velocities (with the held arm pose) when possible."""

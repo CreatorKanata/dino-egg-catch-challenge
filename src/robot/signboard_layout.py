@@ -1,15 +1,33 @@
 """src/robot/signboard_layout.py: Pure layout and status text for the attendee signboard.
 
-Computes where the three camera views and the status bar go and what the status bar says,
-using only the stdlib (own Rect, not pygame.Rect) so it is unit-tested without a display.
-signboard.py does the drawing.
+Computes where the three camera views and the status bar go and what the status bar says
+(mode or STOPPED; the resume hint, a notice, the FSC voice hint, or the drive status; arm
+status with speed and directions), using only the stdlib
+(own Rect, not pygame.Rect) so it is unit-tested without a display. signboard.py draws.
 """
 
 from dataclasses import dataclass
 
 from robot.config import SignboardTheme
 from robot.dino_controller_reader import ControllerState
+from robot.display_status import DisplayStatus
 from robot.drive_state import DriveState
+
+MODE_TEXT = {"manual": "MANUAL", "fsc": "FSC (demo)"}
+ACTION_TEXT = {"none": "", "auto_catch": "AUTO CATCH", "auto_release": "AUTO RELEASE"}
+ARM_TEXT = {
+    "holding": "arm holding",
+    "syncing": "arm syncing",
+    "following": "arm following",
+    "leader fault": "LEADER ARM FAULT",
+    "no leader": "no leader arm",
+}
+SEPARATOR = "  |  "
+VOICE_TEXT = "mic on"
+STOPPED_TEXT = "STOPPED"
+RESUME_HINT = "Press Go Go! to resume"
+FSC_TALK_HINT = "Press Hi! to talk"
+FSC_LISTENING_HINT = "Listening... (Hi! to end)"
 
 
 @dataclass(frozen=True)
@@ -79,12 +97,33 @@ def compute_layout(size: tuple[int, int], margin: int, status_height: int) -> La
     )
 
 
-def _mode_text(drive: DriveState) -> str:
+def _mode_text(status: DisplayStatus) -> str:
+    if status.stopped:
+        return STOPPED_TEXT
+    action = ACTION_TEXT[status.action]
+    return f"{MODE_TEXT[status.mode]} - {action}" if action else MODE_TEXT[status.mode]
+
+
+def _drive_text(drive: DriveState) -> str:
     if drive.input_lost:
         return "INPUT LOST"
     if drive.catch_requested:
         return "CATCH!"
     return "DRIVE"
+
+
+def _second_line(drive: DriveState, status: DisplayStatus) -> str:
+    """Resume hint while stopped; else the notice; else the FSC voice hint or the drive status.
+
+    The controller is not used in FSC, so INPUT LOST / CATCH! / DRIVE appear only in Manual Mode.
+    """
+    if status.stopped:
+        return RESUME_HINT
+    if status.notice:
+        return status.notice
+    if status.mode == "fsc":
+        return FSC_LISTENING_HINT if status.voice_listening else FSC_TALK_HINT
+    return _drive_text(drive)
 
 
 def _speed_text(drive: DriveState, level_count: int, glyphs: Glyphs) -> str:
@@ -111,17 +150,28 @@ def status_lines(
     controller: ControllerState,
     level_count: int,
     glyphs: Glyphs = UNICODE_GLYPHS,
-) -> tuple[str, ...]:
-    """Mode, speed footprints (level fixed by config), and held directions plus rotation."""
-    return (
-        _mode_text(drive),
+    status: DisplayStatus = DisplayStatus(),
+) -> tuple[str, str, str]:
+    """Three lines: the mode or STOPPED (large); see _second_line; then the arm status, FSC
+    voice input, speed footprints (level fixed by config), and held directions plus rotation.
+    """
+    details = (
+        ARM_TEXT[status.arm_status],
+        *((VOICE_TEXT,) if status.voice_listening else ()),
         _speed_text(drive, level_count, glyphs),
         _direction_text(controller, drive.pending_rotation_deg, glyphs),
     )
+    return _mode_text(status), _second_line(drive, status), SEPARATOR.join(details)
 
 
-def status_color(drive: DriveState, theme: SignboardTheme) -> tuple[int, int, int]:
-    """Warning when input is lost, accent while Catch is requested, text color otherwise."""
+def status_color(
+    drive: DriveState, theme: SignboardTheme, status: DisplayStatus = DisplayStatus()
+) -> tuple[int, int, int]:
+    """Warning while stopped or (Manual Mode) input is lost, accent while Catch is requested."""
+    if status.stopped:
+        return theme.warning
+    if status.mode != "manual":
+        return theme.text
     if drive.input_lost:
         return theme.warning
     if drive.catch_requested:

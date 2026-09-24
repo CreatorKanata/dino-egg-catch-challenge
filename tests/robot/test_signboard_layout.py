@@ -1,7 +1,7 @@
 """tests/robot/test_signboard_layout.py: Hardware-free checks of the signboard layout and status text.
 
 The layout and text helpers are pure, so geometry (letterboxing, no overlaps) and the status
-wording for each Drive Mode state are verified without pygame or a display.
+wording for each Manual Mode and drive state are verified without pygame or a display.
 """
 
 from dataclasses import replace
@@ -10,6 +10,7 @@ import unittest
 
 from robot.config import DEFAULT_THEME
 from robot.dino_controller_reader import INITIAL_STATE
+from robot.display_status import DisplayStatus
 from robot.drive_state import DriveState
 from robot.signboard_layout import (
     ASCII_GLYPHS,
@@ -78,40 +79,79 @@ class LayoutTests(unittest.TestCase):
 
 class StatusTextTests(unittest.TestCase):
     def test_mode_line(self):
-        lost = replace(DRIVING, input_lost=True, catch_requested=True)
-        self.assertEqual(status_lines(lost, SYNCED, 3)[0], "INPUT LOST")
-        self.assertEqual(status_lines(replace(DRIVING, catch_requested=True), SYNCED, 3)[0], "CATCH!")
-        self.assertEqual(status_lines(DRIVING, SYNCED, 3)[0], "DRIVE")
+        self.assertEqual(status_lines(DRIVING, SYNCED, 3)[0], "MANUAL")
+        self.assertEqual(status_lines(DRIVING, SYNCED, 3, status=DisplayStatus(mode="fsc"))[0], "FSC (demo)")
+        busy = DisplayStatus(action="auto_catch")
+        self.assertEqual(status_lines(DRIVING, SYNCED, 3, status=busy)[0], "MANUAL - AUTO CATCH")
 
-    def test_speed_footprints(self):
-        self.assertEqual(status_lines(DRIVING, SYNCED, 3)[1], "●○○ speed 1/3")
+    def test_drive_line_and_notice(self):
+        lost = replace(DRIVING, input_lost=True, catch_requested=True)
+        self.assertEqual(status_lines(lost, SYNCED, 3)[1], "INPUT LOST")
+        self.assertEqual(status_lines(replace(DRIVING, catch_requested=True), SYNCED, 3)[1], "CATCH!")
+        self.assertEqual(status_lines(DRIVING, SYNCED, 3)[1], "DRIVE")
+        noticed = DisplayStatus(notice="Auto Catch: not available yet")
+        self.assertEqual(status_lines(lost, SYNCED, 3, status=noticed)[1], "Auto Catch: not available yet")
+
+    def test_detail_line_arm_status_and_speed(self):
+        self.assertEqual(status_lines(DRIVING, SYNCED, 3)[2], "arm holding  |  ●○○ speed 1/3  |  –")
         fast = replace(DRIVING, speed_index=2)
-        self.assertEqual(status_lines(fast, SYNCED, 3)[1], "●●● speed 3/3")
-        self.assertEqual(status_lines(fast, SYNCED, 3, ASCII_GLYPHS)[1], "### speed 3/3")
+        syncing = DisplayStatus(arm_status="syncing")
+        self.assertEqual(status_lines(fast, SYNCED, 3, ASCII_GLYPHS, syncing)[2], "arm syncing  |  ### speed 3/3  |  -")
+        for arm_status, text in (("following", "arm following"), ("leader fault", "LEADER ARM FAULT"),
+                                 ("no leader", "no leader arm")):
+            with self.subTest(arm_status=arm_status):
+                line = status_lines(DRIVING, SYNCED, 3, status=DisplayStatus(arm_status=arm_status))[2]
+                self.assertTrue(line.startswith(text + "  |  "), line)
+
+    def test_voice_listening_is_shown(self):
+        listening = DisplayStatus(mode="fsc", voice_listening=True)
+        self.assertEqual(status_lines(DRIVING, SYNCED, 3, ASCII_GLYPHS, listening)[2],
+                         "arm holding  |  mic on  |  #-- speed 1/3  |  -")
 
     def test_directions_with_both_glyph_sets(self):
         held = replace(SYNCED, up=True, right=True)
-        self.assertEqual(status_lines(DRIVING, held, 3, UNICODE_GLYPHS)[2], "↑ →")
-        self.assertEqual(status_lines(DRIVING, held, 3, ASCII_GLYPHS)[2], "UP RIGHT")
-        self.assertEqual(status_lines(DRIVING, SYNCED, 3, UNICODE_GLYPHS)[2], "–")
-        self.assertEqual(status_lines(DRIVING, SYNCED, 3, ASCII_GLYPHS)[2], "-")
+        self.assertTrue(status_lines(DRIVING, held, 3, UNICODE_GLYPHS)[2].endswith("  |  ↑ →"))
+        self.assertTrue(status_lines(DRIVING, held, 3, ASCII_GLYPHS)[2].endswith("  |  UP RIGHT"))
+        self.assertTrue(status_lines(DRIVING, SYNCED, 3, UNICODE_GLYPHS)[2].endswith("  |  –"))
+        self.assertTrue(status_lines(DRIVING, SYNCED, 3, ASCII_GLYPHS)[2].endswith("  |  -"))
 
     def test_rotation_symbol_on_direction_line(self):
         left = replace(DRIVING, pending_rotation_deg=15.0)
         right = replace(DRIVING, pending_rotation_deg=-30.0)
         held = replace(SYNCED, up=True)
-        self.assertEqual(status_lines(left, SYNCED, 3, UNICODE_GLYPHS)[2], "↺")
-        self.assertEqual(status_lines(right, held, 3, UNICODE_GLYPHS)[2], "↑ ↻")
-        self.assertEqual(status_lines(left, held, 3, ASCII_GLYPHS)[2], "UP CCW")
-        self.assertEqual(status_lines(right, SYNCED, 3, ASCII_GLYPHS)[2], "CW")
-        self.assertEqual(status_lines(DRIVING, held, 3, UNICODE_GLYPHS)[2], "↑")
-        self.assertEqual(status_lines(DRIVING, held, 3, ASCII_GLYPHS)[2], "UP")
+        cases = (
+            (left, SYNCED, UNICODE_GLYPHS, "↺"),
+            (right, held, UNICODE_GLYPHS, "↑ ↻"),
+            (left, held, ASCII_GLYPHS, "UP CCW"),
+            (right, SYNCED, ASCII_GLYPHS, "CW"),
+            (DRIVING, held, UNICODE_GLYPHS, "↑"),
+            (DRIVING, held, ASCII_GLYPHS, "UP"),
+        )
+        for drive, controller, glyphs, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(status_lines(drive, controller, 3, glyphs)[2].split("  |  ")[-1], expected)
 
     def test_status_color(self):
         self.assertEqual(status_color(DriveState(input_lost=True, catch_requested=True), DEFAULT_THEME),
                          DEFAULT_THEME.warning)
         self.assertEqual(status_color(replace(DRIVING, catch_requested=True), DEFAULT_THEME), DEFAULT_THEME.accent)
         self.assertEqual(status_color(DRIVING, DEFAULT_THEME), DEFAULT_THEME.text)
+        self.assertEqual(status_color(DRIVING, DEFAULT_THEME, DisplayStatus(stopped=True)), DEFAULT_THEME.warning)
+        lost = DriveState(input_lost=True)
+        self.assertEqual(status_color(lost, DEFAULT_THEME, DisplayStatus(mode="fsc")), DEFAULT_THEME.text)
+
+    def test_stopped_latch_lines(self):
+        stopped = DisplayStatus(mode="fsc", notice="STOP", stopped=True)
+        lines = status_lines(replace(DRIVING, input_lost=True), SYNCED, 3, status=stopped)
+        self.assertEqual(lines[:2], ("STOPPED", "Press Go Go! to resume"))
+
+    def test_fsc_second_line_is_the_voice_hint(self):
+        lost = replace(DRIVING, input_lost=True)  # the controller is not used in FSC
+        self.assertEqual(status_lines(lost, SYNCED, 3, status=DisplayStatus(mode="fsc"))[1], "Press Hi! to talk")
+        listening = DisplayStatus(mode="fsc", voice_listening=True)
+        self.assertEqual(status_lines(lost, SYNCED, 3, status=listening)[1], "Listening... (Hi! to end)")
+        noticed = DisplayStatus(mode="fsc", notice="FSC")
+        self.assertEqual(status_lines(lost, SYNCED, 3, status=noticed)[1], "FSC")
 
 
 if __name__ == "__main__":

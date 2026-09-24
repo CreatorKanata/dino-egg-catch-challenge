@@ -1,6 +1,6 @@
 """src/robot/controller_to_action.py: Map cached controller levels to LeKiwi base velocities.
 
-Pure, stdlib-only functions used by Drive Mode. Sign conventions follow
+Pure, stdlib-only functions used by Manual Mode (base driving). Sign conventions follow
 LeKiwiClient._from_keyboard_to_base_action (forward = +x, left = +y, rotate left = +theta),
 so the joystick behaves like the reference keyboard teleoperation.
 """

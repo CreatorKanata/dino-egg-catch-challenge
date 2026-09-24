@@ -1,4 +1,4 @@
-"""src/robot/drive_state.py: Immutable Drive Mode state and the per-frame action decision.
+"""src/robot/drive_state.py: Immutable Manual Mode driving state and the per-frame action decision.
 
 Combines controller input, encoder steps, loop timing, and input health into one frozen
 DriveState and chooses the base action. Encoder clicks become a rotation budget in degrees

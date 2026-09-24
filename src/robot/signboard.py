@@ -1,13 +1,14 @@
-"""src/robot/signboard.py: Attendee-facing pygame signboard for Drive Mode (display only).
+"""src/robot/signboard.py: Attendee-facing pygame signboard for Manual Mode.
 
 Shows the overhead camera large, the Pi front and wrist cameras stacked on the right, and a
-status bar (mode, speed footprints, held directions). It takes no robot input: only ESC or the
-window close button, reported by pump(), end Drive Mode. Layout and text live in
-signboard_layout.py; this module only draws and never blocks, since the control loop owns timing.
+status bar (mode, notice or drive status, arm status, speed footprints, held directions). The
+window keeps keyboard focus so KachiButton phrases arrive as text input; pump() returns that
+text together with whether ESC or the window close button ended Manual Mode. Layout and text
+live in signboard_layout.py; this module only draws and never blocks (the loop owns timing).
 """
 
 from collections.abc import Mapping
-from dataclasses import astuple
+from dataclasses import astuple, dataclass
 import logging
 import os
 from typing import Any
@@ -33,6 +34,7 @@ from robot.config import (
     SignboardTheme,
 )
 from robot.dino_controller_reader import ControllerState
+from robot.display_status import DisplayStatus
 from robot.drive_state import DriveState
 from robot.signboard_layout import (
     ASCII_GLYPHS,
@@ -49,6 +51,14 @@ logger = logging.getLogger(__name__)
 # A private-use code point: the default font draws its "missing glyph" box for it.
 MISSING_GLYPH_PROBE = ""
 LABEL_PADDING = 6
+
+
+@dataclass(frozen=True)
+class PumpResult:
+    """Outcome of one event pump: False after ESC or window close, plus text typed meanwhile."""
+
+    keep_running: bool
+    typed: str = ""
 
 
 def _to_pygame_rect(rect: Rect) -> pygame.Rect:
@@ -70,7 +80,7 @@ def _is_exit(event: Any) -> bool:
 
 
 class SignboardView:
-    """pygame window: open(), render() once per loop frame, pump() for exit events, close()."""
+    """pygame window: open(), render() once per loop frame, pump() for exit and text, close()."""
 
     def __init__(
         self,
@@ -101,9 +111,16 @@ class SignboardView:
         self._font = pygame.font.Font(None, SIGNBOARD_FONT_SIZE)
         self._small_font = pygame.font.Font(None, SIGNBOARD_SMALL_FONT_SIZE)
         self._glyphs = pick_glyphs(self._font)
+        pygame.key.start_text_input()  # KachiButton phrases arrive as TEXTINPUT events
         logger.info("Signboard opened (%dx%d, fullscreen=%s)", *self._size, self._fullscreen)
 
-    def render(self, frames: Mapping[str, Any], drive: DriveState, controller: ControllerState) -> None:
+    def render(
+        self,
+        frames: Mapping[str, Any],
+        drive: DriveState,
+        controller: ControllerState,
+        status: DisplayStatus = DisplayStatus(),
+    ) -> None:
         """Draw one frame; frames are HWC uint8 BGR arrays or None (no signal)."""
         screen = self._require_open()
         screen.fill(self._theme.background)
@@ -111,13 +128,15 @@ class SignboardView:
                    *zip(SIGNBOARD_SIDE_CAMERAS, self._layout.sides))
         for name, rect in cameras:
             self._draw_camera(screen, name, frames.get(name), rect)
-        self._draw_status(screen, drive, controller)
+        self._draw_status(screen, drive, controller, status)
         pygame.display.flip()
 
-    def pump(self) -> bool:
-        """Process pending events; False when ESC or the window close button was used."""
+    def pump(self) -> PumpResult:
+        """Process pending events: stop after ESC or window close; collect typed text in order."""
         self._require_open()
-        return not any([_is_exit(event) for event in pygame.event.get()])
+        events = pygame.event.get()
+        typed = "".join(event.text for event in events if event.type == pygame.TEXTINPUT)
+        return PumpResult(keep_running=not any(_is_exit(event) for event in events), typed=typed)
 
     def close(self) -> None:
         if self._screen is None:
@@ -144,11 +163,11 @@ class SignboardView:
         text = self._small_font.render(f"{name}: no signal", True, self._theme.text)
         screen.blit(text, text.get_rect(center=_to_pygame_rect(rect).center))
 
-    def _draw_status(self, screen: Any, drive: DriveState, controller: ControllerState) -> None:
+    def _draw_status(self, screen: Any, drive: DriveState, controller: ControllerState, status: DisplayStatus) -> None:
         box = _to_pygame_rect(self._layout.status)
         pygame.draw.rect(screen, self._theme.frame, box, SIGNBOARD_FRAME_WIDTH)
-        color = status_color(drive, self._theme)
-        lines = status_lines(drive, controller, len(SPEED_LEVELS), self._glyphs)
+        color = status_color(drive, self._theme, status)
+        lines = status_lines(drive, controller, len(SPEED_LEVELS), self._glyphs, status)
         fonts = (self._font,) + (self._small_font,) * (len(lines) - 1)
         surfaces = [font.render(line, True, color) for font, line in zip(fonts, lines)]
         top = box.centery - sum(surface.get_height() for surface in surfaces) // 2
