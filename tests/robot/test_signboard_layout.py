@@ -1,0 +1,118 @@
+"""tests/robot/test_signboard_layout.py: Hardware-free checks of the signboard layout and status text.
+
+The layout and text helpers are pure, so geometry (letterboxing, no overlaps) and the status
+wording for each Drive Mode state are verified without pygame or a display.
+"""
+
+from dataclasses import replace
+from itertools import combinations
+import unittest
+
+from robot.config import DEFAULT_THEME
+from robot.dino_controller_reader import INITIAL_STATE
+from robot.drive_state import DriveState
+from robot.signboard_layout import (
+    ASCII_GLYPHS,
+    UNICODE_GLYPHS,
+    Rect,
+    compute_layout,
+    status_color,
+    status_lines,
+)
+
+SYNCED = replace(INITIAL_STATE, synchronized=True)
+DRIVING = DriveState(speed_index=0, catch_requested=False, input_lost=False)
+
+
+def overlaps(a, b):
+    return a.x < b.x + b.w and b.x < a.x + a.w and a.y < b.y + b.h and b.y < a.y + a.h
+
+
+def inside(rect, size):
+    return rect.x >= 0 and rect.y >= 0 and rect.x + rect.w <= size[0] and rect.y + rect.h <= size[1]
+
+
+class RectFitTests(unittest.TestCase):
+    def test_wide_source_is_letterboxed_vertically(self):
+        fitted = Rect(0, 0, 400, 400).fit(640, 320)
+        self.assertEqual((fitted.w, fitted.h), (400, 200))
+        self.assertEqual((fitted.x, fitted.y), (0, 100))
+
+    def test_tall_source_is_pillarboxed_horizontally(self):
+        fitted = Rect(10, 20, 400, 300).fit(480, 640)
+        self.assertEqual((fitted.w, fitted.h), (225, 300))
+        self.assertEqual((fitted.x, fitted.y), (10 + 87, 20))
+
+    def test_same_aspect_fills_rect(self):
+        self.assertEqual(Rect(5, 5, 320, 240).fit(640, 480), Rect(5, 5, 320, 240))
+
+    def test_invalid_source_is_rejected(self):
+        with self.assertRaises(ValueError):
+            Rect(0, 0, 10, 10).fit(0, 10)
+
+
+class LayoutTests(unittest.TestCase):
+    def test_rects_inside_window_and_disjoint(self):
+        for size in ((1280, 720), (1920, 1080), (640, 480)):
+            with self.subTest(size=size):
+                layout = compute_layout(size, 16, 96)
+                rects = (layout.main, *layout.sides, layout.status)
+                self.assertTrue(all(inside(rect, size) for rect in rects))
+                for a, b in combinations(rects, 2):
+                    self.assertFalse(overlaps(a, b), (a, b))
+
+    def test_main_takes_about_two_thirds_and_sides_stack(self):
+        layout = compute_layout((1280, 720), 16, 96)
+        content = layout.main.w + layout.sides[0].w
+        self.assertAlmostEqual(layout.main.w / content, 2 / 3, places=2)
+        top, bottom = layout.sides
+        self.assertEqual(top.x, bottom.x)
+        self.assertLess(top.y + top.h, bottom.y)
+        self.assertLess(layout.main.y + layout.main.h, layout.status.y)
+        self.assertEqual(layout.status.h, 96)
+
+    def test_too_small_window_is_rejected(self):
+        with self.assertRaises(ValueError):
+            compute_layout((100, 100), 16, 96)
+
+
+class StatusTextTests(unittest.TestCase):
+    def test_mode_line(self):
+        lost = replace(DRIVING, input_lost=True, catch_requested=True)
+        self.assertEqual(status_lines(lost, SYNCED, 3)[0], "INPUT LOST")
+        self.assertEqual(status_lines(replace(DRIVING, catch_requested=True), SYNCED, 3)[0], "CATCH!")
+        self.assertEqual(status_lines(DRIVING, SYNCED, 3)[0], "DRIVE")
+
+    def test_speed_footprints(self):
+        self.assertEqual(status_lines(DRIVING, SYNCED, 3)[1], "●○○ speed 1/3")
+        fast = replace(DRIVING, speed_index=2)
+        self.assertEqual(status_lines(fast, SYNCED, 3)[1], "●●● speed 3/3")
+        self.assertEqual(status_lines(fast, SYNCED, 3, ASCII_GLYPHS)[1], "### speed 3/3")
+
+    def test_directions_with_both_glyph_sets(self):
+        held = replace(SYNCED, up=True, right=True)
+        self.assertEqual(status_lines(DRIVING, held, 3, UNICODE_GLYPHS)[2], "↑ →")
+        self.assertEqual(status_lines(DRIVING, held, 3, ASCII_GLYPHS)[2], "UP RIGHT")
+        self.assertEqual(status_lines(DRIVING, SYNCED, 3, UNICODE_GLYPHS)[2], "–")
+        self.assertEqual(status_lines(DRIVING, SYNCED, 3, ASCII_GLYPHS)[2], "-")
+
+    def test_rotation_symbol_on_direction_line(self):
+        left = replace(DRIVING, pending_rotation_deg=15.0)
+        right = replace(DRIVING, pending_rotation_deg=-30.0)
+        held = replace(SYNCED, up=True)
+        self.assertEqual(status_lines(left, SYNCED, 3, UNICODE_GLYPHS)[2], "↺")
+        self.assertEqual(status_lines(right, held, 3, UNICODE_GLYPHS)[2], "↑ ↻")
+        self.assertEqual(status_lines(left, held, 3, ASCII_GLYPHS)[2], "UP CCW")
+        self.assertEqual(status_lines(right, SYNCED, 3, ASCII_GLYPHS)[2], "CW")
+        self.assertEqual(status_lines(DRIVING, held, 3, UNICODE_GLYPHS)[2], "↑")
+        self.assertEqual(status_lines(DRIVING, held, 3, ASCII_GLYPHS)[2], "UP")
+
+    def test_status_color(self):
+        self.assertEqual(status_color(DriveState(input_lost=True, catch_requested=True), DEFAULT_THEME),
+                         DEFAULT_THEME.warning)
+        self.assertEqual(status_color(replace(DRIVING, catch_requested=True), DEFAULT_THEME), DEFAULT_THEME.accent)
+        self.assertEqual(status_color(DRIVING, DEFAULT_THEME), DEFAULT_THEME.text)
+
+
+if __name__ == "__main__":
+    unittest.main()
