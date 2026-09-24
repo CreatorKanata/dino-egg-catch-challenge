@@ -64,9 +64,10 @@ Arm torque is deliberately not released on `Stop`: the SO-ARM101 has no brakes, 
 
 ### Auto Release
 
-1. Precondition: the pink basket is detected in the front camera at or above `AUTO_RELEASE_MIN_BASKET_H` (normalized height). Otherwise "Basket not in view".
-2. The arm moves to the home/base pose (neck folded) while keeping the gripper angle unchanged so the egg stays held.
-3. A recorded release motion (a fixed joint trajectory, not a learned policy) delivers the egg into the basket and opens the mouth, then returns to home.
+1. Precondition: the pink basket is detected in the front camera and is wide enough (`AUTO_RELEASE_MIN_BASKET_W`, normalized width). Otherwise "Basket not in view" or "Basket too far".
+2. Alignment (owner decision, 2026-09-24): the base aligns to the basket with the same image-based controller as Auto Catch (basket center x and apparent width, reference from the owner's captures at the release position), so the recorded motion always starts from the same relative pose.
+3. The arm moves to the home/base pose (neck folded) while keeping the gripper angle unchanged so the egg stays held.
+4. A recorded release motion (a fixed joint trajectory, not a learned policy) delivers the egg into the basket and opens the mouth, then returns to home.
 
 Egg colors (owner decision, 2026-09-24): white eggs with **green, red, or orange** spots. Blue spots were dropped that day because on the robot they measured the same hue, saturation, and value as the blue tarp; orange is added by painting. The detector is local (no network call), anchored on the spots found as edge ellipses surrounded by white egg body, classified by spot color, with the pink basket excluded by color. Thresholds are calibrated from captures on the robot and stored in the vision config.
 
