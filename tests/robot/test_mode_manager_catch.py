@@ -59,7 +59,7 @@ class StartTests(unittest.TestCase):
 
 class RunningTests(unittest.TestCase):
     def test_presses_ignored_and_stop_cancels_in_every_phase(self):
-        for phase in ("to_start", "align", "to_catch", "wrist_check", "pick_stub", "to_release"):
+        for phase in ("to_start", "align", "to_catch", "wrist_check", "pick", "to_release"):
             busy = replace(RUNNING, catch=replace(RUNNING.catch, phase=phase))
             with self.subTest(phase=phase):
                 for command in ("hi", "thx", "mode_toggle"):
@@ -78,7 +78,9 @@ class RunningTests(unittest.TestCase):
                     ("release_timeout", "Arm did not reach the release pose", "warning"),
                     ("start_timeout", "Arm did not reach the release pose", "warning"),
                     ("catch_timeout_returned", "Arm did not reach the catch pose", "warning"),
-                    ("no_wrist_egg_returned", "Egg not in wrist view", "warning"))
+                    ("no_wrist_egg_returned", "Egg not in wrist view", "warning"),
+                    ("pick_timeout_returned", "Catch timed out", "warning"),
+                    ("policy_error_returned", "Policy error", "warning"))
         for outcome, notice, level in terminal:
             with self.subTest(outcome=outcome):
                 ended = catch_notice(RUNNING, outcome, 3.0)
@@ -87,7 +89,9 @@ class RunningTests(unittest.TestCase):
                 self.assertTrue(ended.stop_base and ended.disengage_arm)
         ongoing = (("catch_timeout", "Arm did not reach the catch pose", "warning"),
                    ("no_wrist_egg", "Egg not in wrist view", "warning"),
-                   ("policy_stub", "Catch: policy not available yet", "info"))
+                   ("policy_stub", "Catch: policy not available yet", "info"),
+                   ("pick_done", "Catch finished", "info"), ("pick_timeout", "Catch timed out", "warning"),
+                   ("policy_error", "Policy error", "warning"))
         for outcome, notice, level in ongoing:
             with self.subTest(outcome=outcome):
                 shown = catch_notice(RUNNING, outcome, 3.0)

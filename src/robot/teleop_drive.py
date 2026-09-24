@@ -2,17 +2,18 @@
 
 Opens the dino-controller, the LeKiwi connection, the leader arm, the overhead camera, the
 attendee signboard (a separate interpreter that also receives KachiButton phrases, see
-signboard_client.py), and optionally Rerun; runs the loop in drive_loop.py; and guarantees
-zero base velocities before anything is disconnected. Mode rules live in mode_manager.py,
-per-frame decisions in manual_mode.py, and the drive rules in drive_state.py.
+signboard_client.py), and optionally Rerun; loads the Auto Catch pick policy first (before any
+hardware; a missing or broken checkpoint only logs a warning and leaves the stub); runs the loop in
+drive_loop.py; and guarantees zero base velocities before anything is disconnected. Mode rules
+live in mode_manager.py, per-frame decisions in manual_mode.py, and the drive rules in
+drive_state.py. LeRobot, torch, and cv2 load lazily (the camera, Rerun, the loop's sleep, the
+policy), so importing this module and `--help` stay light.
 """
 
 import argparse
 import logging
 from collections.abc import Callable
 from typing import Any
-
-from lerobot.utils.visualization_utils import init_rerun
 
 from robot.config import (
     CONTROLLER_SERIAL_PORT,
@@ -26,8 +27,9 @@ from robot.dino_controller_reader import SerialControllerReader
 from robot.drive_loop import DriveDevices, loop
 from robot.leader_arm import LeaderArm
 from robot.lekiwi_adapter import LeKiwiAdapter
+from robot.policy.config_policy import PICK_POLICY_DEVICE, PICK_POLICY_PATH
+from robot.policy.pick_policy import PickPolicy
 from robot.signboard_client import SignboardClient
-from robot.top_camera import TopCamera
 
 logger = logging.getLogger("robot.teleop_drive")
 
@@ -51,17 +53,45 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help=f"leader arm serial port (default: {LEADER_ARM_PORT})")
     parser.add_argument("--no-leader", action="store_true",
                         help="do not open the leader arm; the arm holds its pose (drive-only Manual Mode)")
+    parser.add_argument("--pick-policy", default=PICK_POLICY_PATH,
+                        help=f"Auto Catch pick policy: Hub repo id or local checkpoint directory; '' keeps the stub "
+                             f"(default: {PICK_POLICY_PATH})")
+    parser.add_argument("--policy-device", default=PICK_POLICY_DEVICE,
+                        help=f"pick policy device: auto (mps if available, else cpu), cpu, mps, or cuda "
+                             f"(default: {PICK_POLICY_DEVICE})")
     return parser.parse_args(argv)
 
 
+def load_pick_policy(path: str, device: str, factory: Callable[..., PickPolicy] = PickPolicy) -> PickPolicy | None:
+    """The loaded pick policy, or None (the stub) when disabled or when loading fails for any reason;
+    the demo must not be blocked by a missing model."""
+    if not path:
+        logger.info("Pick policy disabled; Auto Catch runs the stub")
+        return None
+    runner = factory(path, device=device)
+    try:
+        runner.load()
+    except Exception:
+        logger.warning("Pick policy %s could not be loaded; Auto Catch runs the stub", path, exc_info=True)
+        return None
+    return runner
+
+
 def build_devices(args: argparse.Namespace) -> DriveDevices:
+    pick_policy = load_pick_policy(args.pick_policy, args.policy_device)  # before any hardware
+    camera = None
+    if not args.no_camera:
+        from robot.top_camera import TopCamera  # loads cv2 and torch through LeRobot
+
+        camera = TopCamera()
     return DriveDevices(
         reader=SerialControllerReader(args.controller_port),
         adapter=LeKiwiAdapter(remote_ip=args.remote_ip),
-        camera=None if args.no_camera else TopCamera(),
+        camera=camera,
         view=None if args.no_signboard else SignboardClient(fullscreen=args.fullscreen),
         use_rerun=args.rerun,
         leader=None if args.no_leader else LeaderArm(port=args.leader_port),
+        pick_policy=pick_policy,
     )
 
 
@@ -76,6 +106,8 @@ def connect(devices: DriveDevices) -> None:
     if devices.view is not None:
         devices.view.open()
     if devices.use_rerun:
+        from lerobot.utils.visualization_utils import init_rerun  # loads cv2; only when opted in
+
         init_rerun(session_name=RERUN_SESSION_NAME)
 
 
@@ -122,6 +154,7 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Start the host on the Pi first: {HOST_COMMAND}")
     leader = "none (--no-leader)" if args.no_leader else args.leader_port
     print(f"Controller: {args.controller_port}  Robot: {args.remote_ip}  Leader arm: {leader}")
+    print(f"Pick policy: {args.pick_policy or 'none (stub)'}  Device: {args.policy_device}")
     run(args)
 
 

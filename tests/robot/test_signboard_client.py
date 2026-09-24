@@ -127,6 +127,14 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertNotIn(b"objc[", result.stderr)
 
+    def test_parent_module_never_loads_torch_lerobot_or_cv2(self):
+        result = run_isolated(
+            "import robot.teleop_drive, robot.policy.pick_policy, robot.policy.lerobot_policy, sys\n"
+            "loaded = [name for name in ('torch', 'lerobot', 'cv2', 'pygame') if name in sys.modules]\n"
+            "assert not loaded, loaded\n"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
     def test_pure_decision_modules_are_stdlib_only(self):
         result = run_isolated(
             "import sys\n"
@@ -134,6 +142,7 @@ class IsolationTests(unittest.TestCase):
             "import robot.vision.egg_size, robot.vision.timing, robot.vision.align_trace\n"
             "import robot.auto_release, robot.arm_motions, robot.arm_store, robot.arm_follow\n"
             "import robot.vision.basket_size, robot.vision.config_vision, robot.auto_catch\n"
+            "import robot.policy.config_policy, robot.policy.pick_step\n"
             "loaded = [name for name in ('cv2', 'numpy', 'pygame', 'lerobot') if name in sys.modules]\n"
             "assert not loaded, loaded\n"
         )

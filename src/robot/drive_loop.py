@@ -4,14 +4,17 @@ Polls the controller and the KachiButton commands, reads the leader arm, decides
 action and arm pose (manual_mode.py, including a running Auto Catch or Auto Release), sends them,
 applies the staff keys (save home or catch pose, record the release motion; arm_store.py), then
 observes: the Pi frames are converted to BGR, the 16:9 overhead frame is downscaled once, the egg
-and basket detectors run on the front frame in Manual Mode (their results drive the next frame's
+and basket detectors run on the front frame in Manual Mode outside the arm-only action phases (their results drive the next frame's
 `Hi!` / `Thx` checks and alignments), the wrist-view check runs only during Auto Catch's
 wrist_check frames (when enabled), a `capture` command saves the frames (without overlays), and
-the operator (Rerun) and attendee (signboard) views are updated.
+the operator (Rerun) and attendee (signboard) views are updated. The raw observation (Pi frames
+still RGB-ordered, as LeKiwiClient delivers them and as the dataset stored them) is kept for the
+next frame's pick policy call; the BGR copies never reach the policy.
 Extracted from teleop_drive.py so the entry point only handles setup and shutdown. The loop
 ends when the display reports ESC, window close, or a dead signboard process; `Stop` does not
-end it. This module must not import pygame (robot.signboard); cv2 is only loaded lazily (by the
-LeRobot helpers used here and inside robot.vision), so its unit tests stay free of OpenCV.
+end it. This module must not import pygame (robot.signboard); cv2, torch, and LeRobot are only
+loaded lazily (precise_sleep in loop(), Rerun when opted in, robot.vision, the pick policy), so its
+unit tests stay free of OpenCV and `import robot.teleop_drive` stays light.
 """
 
 from collections.abc import Mapping
@@ -21,14 +24,11 @@ from pathlib import Path
 import time
 from typing import TYPE_CHECKING, Any, Protocol
 
-from lerobot.utils.robot_utils import precise_sleep
-
 from robot.config import (
     CAPTURE_COMMAND,
     FRONT_CAMERA_KEY,
     LOOP_HZ,
     SIGNBOARD_SIDE_CAMERAS,
-    SPEED_LEVELS,
     TOP_CAMERA_KEY,
     WRIST_CAMERA_KEY,
 )
@@ -44,9 +44,9 @@ from robot.arm_store import (
     wants_catch,
     wants_release,
 )
-from robot.auto_catch import DEFAULT_CATCH_LIMITS, CatchLimits, CatchRequest
+from robot.auto_catch import DEFAULT_CATCH_LIMITS, CatchLimits, CatchRequest, PolicyAct
 from robot.auto_release import ReleaseRequest
-from robot.display_status import DisplayStatus, display_status, front_overlays
+from robot.display_status import DisplayStatus, display_status, front_overlays, pick_seconds
 from robot.drive_state import DriveState, update_drive_state
 from robot.leader_arm import LeaderArm
 from robot.lekiwi_adapter import LeKiwiAdapter
@@ -55,9 +55,12 @@ from robot.display_status import ArmStatus
 from robot.manual_mode import (
     LoopState,
     auto_arm_status,
+    drive_scalars,
     fold_commands,
+    front_detection_wanted,
     leader_wanted,
     log_changes,
+    log_transitions,
     plan_arm,
     plan_base,
     step_auto_catch,
@@ -95,6 +98,14 @@ class DisplaySink(Protocol):
     def close(self) -> None: ...
 
 
+class PickRunner(Protocol):
+    """Pick policy runner (policy/pick_policy.PickPolicy): reset per pick, one action per frame."""
+
+    def reset(self) -> None: ...
+
+    def act(self, observation: Mapping[str, Any]) -> dict[str, float]: ...
+
+
 @dataclass(frozen=True)
 class DriveDevices:
     """Everything the loop talks to; optional parts are None when disabled on the CLI."""
@@ -107,31 +118,7 @@ class DriveDevices:
     leader: LeaderArm | None = None
     arm_paths: ArmDataPaths = DEFAULT_PATHS  # home pose, release motion, and catch pose files
     catch_limits: CatchLimits = DEFAULT_CATCH_LIMITS  # Auto Catch arm speed, timeouts, wrist check
-
-
-def log_transitions(before: DriveState, after: DriveState) -> None:
-    """Log input loss, Catch requests, and speed changes once per change, not every frame."""
-    if after.input_lost != before.input_lost:
-        if after.input_lost:
-            logger.warning("Controller input lost; base stopped")
-        else:
-            logger.info("Controller input synchronized")
-    if after.catch_requested != before.catch_requested:
-        logger.info("Catch %s", "requested; base stopped" if after.catch_requested else "released")
-    if after.speed_index != before.speed_index:
-        logger.info("Speed level %d of %d", after.speed_index + 1, len(SPEED_LEVELS))
-
-
-def drive_scalars(state: LoopState) -> dict[str, float]:
-    drive = state.drive
-    return {
-        "drive.speed_index": float(drive.speed_index),
-        "drive.catch_requested": float(drive.catch_requested),
-        "drive.input_lost": float(drive.input_lost),
-        "drive.pending_rotation_deg": float(drive.pending_rotation_deg),
-        "mode.fsc": float(state.app.mode == "fsc"),
-        "arm.engaged": float(state.follow.engaged),
-    }
+    pick_policy: PickRunner | None = None  # None = the pick stub (not configured or failed to load)
 
 
 def camera_frames(observation: dict[str, Any], top_frame: Any | None) -> dict[str, Any | None]:
@@ -148,6 +135,25 @@ def _plan_arm(
     has_leader = devices.leader is not None
     leader_pose = devices.leader.read_pose() if leader_wanted(app, has_leader) else None
     return plan_arm(devices.adapter.arm_hold, leader_pose, follow, app, has_leader, dt)
+
+
+def _failed_reset(error: Exception) -> PolicyAct:
+    def act(_observation: Mapping[str, Any]) -> dict[str, float]:
+        raise RuntimeError("Pick policy reset failed") from error
+    return act
+
+
+def pick_act(runner: PickRunner | None, app: AppState) -> PolicyAct | None:
+    """The runner's act for this frame (None = stub), reset on the first pick frame so its action
+    queue starts empty; a failed reset surfaces as a policy error in the pick phase."""
+    if runner is None:
+        return None
+    if app.action == "auto_catch" and app.catch.phase == "pick" and app.catch.pick.frames == 0:
+        try:
+            runner.reset()
+        except Exception as error:
+            return _failed_reset(error)
+    return runner.act
 
 
 def _next_state(
@@ -169,7 +175,8 @@ def _next_state(
              if wants_catch(state.app, commands) else CatchRequest())
     folded = fold_commands(state.app, commands, now, catch, release, devices.catch_limits)
     folded, catch_base, catch_arm, trace = step_auto_catch(folded, state.egg, state.wrist, arm_hold, now,
-                                                           devices.catch_limits)
+                                                           devices.catch_limits, state.observation,
+                                                           pick_act(devices.pick_policy, folded.app))
     folded, release_base, release_arm = step_auto_release(folded, state.basket, arm_hold, now)
     follow = disengaged() if folded.disengage_arm else state.follow
     drive = update_drive_state(state.drive, controller, encoder_delta, stale, dt)
@@ -210,10 +217,11 @@ def record_trace(path: str | None, row: TraceRow | None, running: bool) -> str |
 
 
 def detect_front(state: LoopState, frames: Mapping[str, Any]) -> tuple[LoopState, tuple[EggDetection, ...]]:
-    """Run the egg and basket detectors on the front frame in Manual Mode; remember the best egg
-    and the basket, and time the egg detector."""
+    """Run the egg and basket detectors on the front frame in Manual Mode, except in action phases
+    that ignore them (front_detection_wanted); remember the best egg and the basket (None when
+    skipped, so the signboard shows no stale overlay), and time the egg detector."""
     front = frames.get(FRONT_CAMERA_KEY)
-    if state.app.mode != "manual" or front is None:
+    if not front_detection_wanted(state.app) or front is None:
         return replace(state, egg=None, basket=None), ()
     started = time.perf_counter()
     detections = detect_eggs(front)
@@ -249,11 +257,12 @@ def step(devices: DriveDevices, state: LoopState, previous_time: float | None) -
     now = time.monotonic()
     dt = 0.0 if previous_time is None else now - previous_time
     next_state, controller, sent, commands = _next_state(devices, state, now, dt)
-    observation = normalize_observation_frames(devices.adapter.observe())
+    raw = devices.adapter.observe()  # RGB Pi frames: kept for the pick policy, never shown
+    observation = normalize_observation_frames(raw)  # BGR copies for detection and display
     top_raw = devices.camera.read_latest() if devices.camera is not None else None  # 1280x720, for a later tracker
     top_frame = downscale_to_width(top_raw)  # 960x540 for the signboard, Rerun, and captures
     frames = camera_frames(observation, top_frame)
-    next_state, detections = detect_front(next_state, frames)
+    next_state, detections = detect_front(replace(next_state, observation=raw), frames)
     next_state = replace(next_state, wrist=detect_wrist(next_state, frames, devices.catch_limits))
     if CAPTURE_COMMAND in commands:
         next_state = capture(next_state, frames, detections, now)
@@ -266,13 +275,15 @@ def step(devices: DriveDevices, state: LoopState, previous_time: float | None) -
         return next_state, True, now
     overlays = front_overlays(next_state.app, next_state.egg, next_state.basket)
     status = display_status(next_state.app, next_state.arm_status, overlays,
-                            recording_seconds(next_state.recording, now))
+                            recording_seconds(next_state.recording, now), pick_seconds(next_state.app, now))
     devices.view.render(frames, next_state.drive, controller, status)
     return next_state, devices.view.pump(), now
 
 
 def loop(devices: DriveDevices) -> None:
     """Run at LOOP_HZ until the display ends; exceptions propagate to the caller."""
+    from lerobot.utils.robot_utils import precise_sleep  # loads torch; only when the loop really runs
+
     period = 1.0 / LOOP_HZ
     state = LoopState()
     keep_running = True

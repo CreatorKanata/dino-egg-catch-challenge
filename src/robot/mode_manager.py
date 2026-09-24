@@ -5,9 +5,9 @@ Pure and stdlib-only. Implements the decisions in docs/spec/operating-modes.md, 
 releases (back to Manual Mode); otherwise `Go Go!` toggles Manual Mode and FSC with zero base
 velocities first, and presses are ignored while an automatic action runs. `Hi!` in Manual Mode
 checks the egg size and the recorded catch and release poses (start_auto_catch) and starts Auto
-Catch (auto_catch.py: alignment, catch pose, wrist check, the pick-policy stub, release pose);
-`Thx` checks the basket size and the recorded home pose and release motion (start_auto_release)
-and starts Auto Release (auto_release.py). The pick policy and FSC are still display-only stubs.
+Catch (auto_catch.py: alignment, catch pose, wrist check, the pick policy or its stub, release
+pose); `Thx` checks the basket size and the recorded home pose and release motion
+(start_auto_release) and starts Auto Release (auto_release.py). FSC is still a display-only stub.
 """
 
 from dataclasses import dataclass, replace
@@ -48,13 +48,20 @@ NOTICE_CATCH: Final = {
     "catch_timeout": ("Arm did not reach the catch pose", "warning"),
     "no_wrist_egg": ("Egg not in wrist view", "warning"),
     "policy_stub": ("Catch: policy not available yet", "info"),
+    # The policy's stop condition, not a verified hold: "Caught!" is reserved for a future success check.
+    "pick_done": ("Catch finished", "info"),
+    "pick_timeout": ("Catch timed out", "warning"),
+    "policy_error": ("Policy error", "warning"),
     "release_timeout": ("Arm did not reach the release pose", "warning"),
     "done": ("Ready", "info"),  # only after a successful pass (the stub counts as success)
     "catch_timeout_returned": ("Arm did not reach the catch pose", "warning"),  # shown again once back
     "no_wrist_egg_returned": ("Egg not in wrist view", "warning"),
+    "pick_timeout_returned": ("Catch timed out", "warning"),
+    "policy_error_returned": ("Policy error", "warning"),
 }
 CATCH_TERMINAL: Final = ("start_timeout", "lost", "align_timeout", "release_timeout", "done",
-                         "catch_timeout_returned", "no_wrist_egg_returned")
+                         "catch_timeout_returned", "no_wrist_egg_returned", "pick_timeout_returned",
+                         "policy_error_returned")
 NOTICE_CAPTURED: Final = "Captured"
 NOTICE_CAPTURE_FAILED: Final = "Capture failed"
 

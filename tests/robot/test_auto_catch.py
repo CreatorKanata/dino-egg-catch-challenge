@@ -2,7 +2,7 @@
 
 auto_catch.py is pure, so the start rule (an arm off the release pose first moves there in
 `to_start`; near it, or with CATCH_VIA_RELEASE_POSE off, the alignment starts at once), the phase
-sequence align -> to_catch -> wrist_check -> pick_stub -> to_release with fake egg and wrist
+sequence align -> to_catch -> wrist_check -> pick (stub: no runner) -> to_release with fake egg and wrist
 detections and a fake clock, all joints arriving together in the scripted moves, the gripper following the catch
 pose in `to_catch` and held in `to_release`, the per-frame rate limit, the zero base outside
 `align`, the wrist check (disabled, enabled with and without an egg), and every terminal outcome
@@ -145,7 +145,7 @@ class ArmPhaseTests(unittest.TestCase):
         held = dict(runner.commanded)
         checks = [runner.step() for _ in range(LIMITS.wrist_check_frames)]
         self.assertTrue(all(result.arm == held for result in checks))  # held for the whole check
-        self.assertEqual(checks[-1].state.phase, "pick_stub")
+        self.assertEqual(checks[-1].state.phase, "pick")
         stub = runner.step()
         self.assertEqual((stub.outcome, stub.state.phase, stub.arm), ("policy_stub", "to_release", held))
         runner.run_until("idle")
@@ -170,7 +170,7 @@ class ArmPhaseTests(unittest.TestCase):
         seen = [None] * (ENABLED.wrist_check_frames - 1) + [WRIST_EGG]
         for wrist in reversed(seen):  # the egg is seen only in the first check frame
             result = runner.step(wrist=wrist)
-        self.assertEqual((result.outcome, result.state.phase), ("running", "pick_stub"))
+        self.assertEqual((result.outcome, result.state.phase), ("running", "pick"))
 
     def test_rate_limit_holds_for_every_arm_phase(self):
         runner = Runner()
@@ -214,7 +214,7 @@ class TimeoutTests(unittest.TestCase):
         self.assertIsNot(result.arm, START)
 
     def test_phase_names(self):
-        self.assertEqual(CATCH_PHASES, ("idle", "to_start", "align", "to_catch", "wrist_check", "pick_stub",
+        self.assertEqual(CATCH_PHASES, ("idle", "to_start", "align", "to_catch", "wrist_check", "pick",
                                         "to_release"))
 
 

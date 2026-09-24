@@ -29,10 +29,10 @@ CHANNELS = 3
 DRIVE_FIELDS = ("speed_index", "catch_requested", "input_lost", "pending_rotation_deg")
 CONTROLLER_FIELDS = ("up", "down", "left", "right", "button", "synchronized")
 STATUS_FIELDS = ("mode", "action", "voice_listening", "notice", "arm_status", "stopped", "notice_level",
-                 "recording_s", "progress", "phase")
+                 "recording_s", "progress", "phase", "phase_s")
 PHASES = ("", *CATCH_PHASES)  # "" = no Auto Catch running
 # Optional status numbers: None or a finite number within these bounds.
-OPTIONAL_BOUNDS = {"recording_s": (0.0, 24 * 3600.0), "progress": (0.0, 1.0)}
+OPTIONAL_BOUNDS = {"recording_s": (0.0, 24 * 3600.0), "progress": (0.0, 1.0), "phase_s": (0.0, 24 * 3600.0)}
 OVERLAY_NUMBERS = ("cx", "cy", "w", "h", "angle")
 # Normalized overlay bounds: a fitted ellipse of a partly visible egg may extend past the frame.
 OVERLAY_BOUNDS = {"cx": (-1.0, 2.0), "cy": (-1.0, 2.0), "w": (0.0, 3.0), "h": (0.0, 3.0), "angle": (-360.0, 360.0)}

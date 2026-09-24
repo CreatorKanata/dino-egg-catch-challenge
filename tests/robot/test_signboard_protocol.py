@@ -59,7 +59,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(fields["status"], {"mode": "fsc", "action": "none", "voice_listening": True,
                                             "notice": "Listening...", "arm_status": "leader fault",
                                             "stopped": False, "notice_level": "info", "recording_s": None,
-                                            "progress": None, "phase": "", "overlays": []})
+                                            "progress": None, "phase": "", "phase_s": None,
+                                            "overlays": []})
         self.assertEqual(fields["frames"], [{"name": "top", "w": 4, "h": 3}, {"name": "front", "w": 0, "h": 0}])
         self.assertEqual(body, FRAME.tobytes())
 
@@ -150,8 +151,9 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(read_packet(io.BytesIO(encode(DisplayPacket(DRIVE, CONTROLLER, (), status)))).status, status)
 
     def test_catch_phase_round_trips_and_unknown_phases_are_rejected(self):
-        status = replace(STATUS, action="auto_catch", arm_status="auto catch", phase="wrist_check")
-        self.assertEqual(read_packet(io.BytesIO(encode(DisplayPacket(DRIVE, CONTROLLER, (), status)))).status, status)
+        for phase, seconds in (("wrist_check", None), ("pick", 4.5)):
+            status = replace(STATUS, action="auto_catch", arm_status="auto catch", phase=phase, phase_s=seconds)
+            self.assertEqual(read_packet(io.BytesIO(encode(DisplayPacket(DRIVE, CONTROLLER, (), status)))).status, status)
         good = json.loads(encode(packet(())).partition(b"\n")[0])
         for phase in ("dance", 3, None):
             with self.subTest(phase=phase):
@@ -164,7 +166,7 @@ class ProtocolTests(unittest.TestCase):
         good = json.loads(encode(packet(())).partition(b"\n")[0])
         cases = {"negative recording": {"recording_s": -1.0}, "progress above one": {"progress": 1.5},
                  "text progress": {"progress": "half"}, "bool recording": {"recording_s": True},
-                 "nan progress": {"progress": float("nan")}}
+                 "nan progress": {"progress": float("nan")}, "negative pick time": {"phase_s": -0.5}}
         for name, fields in cases.items():
             with self.subTest(name=name):
                 line = json.dumps({**good, "status": {**good["status"], **fields}}).encode() + b"\n"

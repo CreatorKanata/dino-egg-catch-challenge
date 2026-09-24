@@ -1,49 +1,73 @@
-"""src/robot/auto_catch.py: Auto Catch state machine (Phase 3 step 1): align, catch pose, wrist check, return.
+"""src/robot/auto_catch.py: Auto Catch state machine (Phase 3): align, catch pose, wrist check, pick, return.
 
 Owner decisions (docs/spec/operating-modes.md, sections 1 and 4): after the base alignment the arm
 moves slowly to the recorded catch pose (head down, the wrist camera sees the egg), the wrist view
-must show the egg, the pick policy runs (a stub in this step: a notice, no motion), and the arm moves
-slowly to the release pose (home_pose.json, head up) with the gripper kept, so a caught egg stays
-held. Phases: [to_start] -> align -> to_catch -> wrist_check -> pick_stub -> to_release -> idle.
+may be checked, the pick policy runs, and the arm moves slowly to the release pose (home_pose.json,
+head up) with the gripper kept, so a caught egg stays held. Phases:
+[to_start] -> align -> to_catch -> wrist_check -> pick -> to_release -> idle.
 Owner decision (2026-09-25): an arm that the leader left off the release pose (any non-gripper joint
 farther than POSE_NEAR_TOLERANCE_DEG) first moves there in `to_start` with the base at zero, because
 driving with the head low or moving straight to the catch pose from an arbitrary pose could sweep
 the head through the egg; release -> catch is the known-safe path (CATCH_VIA_RELEASE_POSE switches
-it off for maintenance). Every scripted pose move is synchronized (all joints arrive together). A failed wrist
-check or a catch-pose timeout warns and still returns to the release pose; the warning is shown
-again when the arm is back ("Ready" only after a pass through the stub). Modeled on
-auto_release.py and reusing its gripper key and pose timeout, the shared alignment controller, and
-arm_follow's rate-limited, synchronized approach (all joints arrive together). Every frame returns the base action and the arm pose to send;
-the mode manager cancels the action on Stop (the loop then holds the arm and zeroes the base). Pure
-and stdlib-only; the caller passes the time, the egg and wrist detections, and the commanded pose.
+it off for maintenance). Every scripted pose move is synchronized (all joints arrive together).
+`pick` (Phase 3 step 3) calls the injected policy runner once per frame on the raw observation;
+policy/pick_step.py caps each arm key per frame, keeps the base at zero, and decides done /
+timeout; a runner exception ends the phase. Without a runner, `pick` is the old stub (a notice, no
+motion). A failed wrist check, a catch-pose timeout, a pick timeout, or a policy error warns and
+still returns to the release pose; the warning is shown again when the arm is back ("Ready" only
+after a stub pass or a finished pick). Modeled on auto_release.py and reusing its gripper key and
+pose timeout, the shared alignment controller, and arm_follow's synchronized approach. Every frame
+returns the base action and the arm pose to send; the mode manager cancels the action on Stop (the
+loop then holds the arm and zeroes the base, and the runner is not called again). Stdlib-only; the
+caller passes the time, the detections, the observation, and the commanded pose (the only clock
+read here times the policy call for the log).
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from typing import Final, Literal
+import logging
+import time
+from typing import Any, Final, Literal
 
 from robot.align import AlignResult, AlignState, align_step, start_align, zero_base
 from robot.arm_follow import approach_pose_sync, within
 from robot.auto_release import GRIPPER_KEY, JOINT_KEYS
 from robot.config import (
+    ARM_KEYS,
     ARM_ENGAGE_SPEED_DEG_S,
     ARM_ENGAGE_TOLERANCE_DEG,
     CATCH_VIA_RELEASE_POSE,
     POSE_NEAR_TOLERANCE_DEG,
     RELEASE_HOME_TIMEOUT_S,
 )
+from robot.policy.pick_step import (
+    DEFAULT_PICK_LIMITS,
+    PickLimits,
+    PickState,
+    advance_pick,
+    pick_guard,
+    pick_result,
+    pick_timed_out,
+    start_pick,
+)
 from robot.vision.config_vision import WRIST_CHECK_ENABLED, WRIST_CHECK_FRAMES
 from robot.vision.egg_size import SizeClass
 
+logger = logging.getLogger(__name__)
+
 Pose = Mapping[str, float]
-CatchPhase = Literal["idle", "to_start", "align", "to_catch", "wrist_check", "pick_stub", "to_release"]
-CATCH_PHASES: Final = ("idle", "to_start", "align", "to_catch", "wrist_check", "pick_stub", "to_release")
-# Terminal: start_timeout, lost, align_timeout, release_timeout, done, and the two *_returned (back at
+PolicyAct = Callable[[Mapping[str, Any]], Mapping[str, float]]  # raw observation -> the nine action keys
+CatchPhase = Literal["idle", "to_start", "align", "to_catch", "wrist_check", "pick", "to_release"]
+CATCH_PHASES: Final = ("idle", "to_start", "align", "to_catch", "wrist_check", "pick", "to_release")
+# Terminal: start_timeout, lost, align_timeout, release_timeout, done, and the *_returned (back at
 # the release pose after a failure). The others only show a notice.
-CatchFailure = Literal["", "catch_timeout", "no_wrist_egg"]
+CatchFailure = Literal["", "catch_timeout", "no_wrist_egg", "pick_timeout", "policy_error"]
 CatchOutcome = Literal["running", "start_timeout", "lost", "align_timeout", "catch_timeout", "no_wrist_egg",
-                       "policy_stub", "release_timeout", "done", "catch_timeout_returned", "no_wrist_egg_returned"]
-RETURNED: Final = {"catch_timeout": "catch_timeout_returned", "no_wrist_egg": "no_wrist_egg_returned"}
+                       "policy_stub", "pick_done", "pick_timeout", "policy_error", "release_timeout", "done",
+                       "catch_timeout_returned", "no_wrist_egg_returned", "pick_timeout_returned",
+                       "policy_error_returned"]
+RETURNED: Final = {"catch_timeout": "catch_timeout_returned", "no_wrist_egg": "no_wrist_egg_returned",
+                   "pick_timeout": "pick_timeout_returned", "policy_error": "policy_error_returned"}
 
 
 @dataclass(frozen=True)
@@ -57,6 +81,7 @@ class CatchLimits:
     wrist_check_enabled: bool = WRIST_CHECK_ENABLED
     via_release_pose: bool = CATCH_VIA_RELEASE_POSE
     near_tolerance: float = POSE_NEAR_TOLERANCE_DEG
+    pick: PickLimits = DEFAULT_PICK_LIMITS
 
 
 DEFAULT_CATCH_LIMITS: Final = CatchLimits()
@@ -76,8 +101,8 @@ class CatchRequest:
 @dataclass(frozen=True)
 class CatchState:
     """Phase and its start time, the alignment, the two poses, the wrist-check frame count and
-    whether an egg was seen in any of them, the time of the last step, and the failure that sent the
-    arm back to the release pose ("" on the success path)."""
+    whether an egg was seen in any of them, the time of the last step, the failure that sent the
+    arm back to the release pose ("" on the success path), and the pick phase's progress."""
 
     phase: CatchPhase = "idle"
     started_at: float = 0.0
@@ -88,6 +113,7 @@ class CatchState:
     egg_seen: bool = False
     updated_at: float = 0.0
     failure: CatchFailure = ""
+    pick: PickState = PickState()
 
 
 @dataclass(frozen=True)
@@ -120,6 +146,10 @@ def _next_phase(state: CatchState, phase: CatchPhase, now: float) -> CatchState:
     return replace(state, phase=phase, started_at=now, checked_frames=0, egg_seen=False, updated_at=now)
 
 
+def _fail(state: CatchState, failure: CatchFailure, now: float) -> CatchState:
+    return _next_phase(replace(state, failure=failure), "to_release", now)
+
+
 def _hold(state: CatchState, commanded: Pose, outcome: CatchOutcome = "running") -> CatchStep:
     return CatchStep(state, zero_base(), dict(commanded), outcome)
 
@@ -149,8 +179,7 @@ def _to_start(state: CatchState, commanded: Pose, now: float, dt: float, limits:
 def _to_catch(state: CatchState, commanded: Pose, now: float, dt: float, limits: CatchLimits) -> CatchStep:
     """Toward the full catch pose, the gripper included (the mouth opens as recorded)."""
     if now - state.started_at > limits.pose_timeout_s:
-        return _hold(_next_phase(replace(state, failure="catch_timeout"), "to_release", now), commanded,
-                     "catch_timeout")
+        return _hold(_fail(state, "catch_timeout", now), commanded, "catch_timeout")
     target = dict(state.catch or {})
     moved = approach_pose_sync(commanded, target, dt, limits.approach_speed)  # all keys arrive together
     if within(moved, target, limits.tolerance):
@@ -167,9 +196,37 @@ def _wrist_check(state: CatchState, wrist: object | None, commanded: Pose, now: 
     if checked < limits.wrist_check_frames:
         return _hold(replace(state, checked_frames=checked, egg_seen=seen, updated_at=now), commanded)
     if limits.wrist_check_enabled and not seen:
-        return _hold(_next_phase(replace(state, failure="no_wrist_egg"), "to_release", now), commanded,
-                     "no_wrist_egg")
-    return _hold(_next_phase(state, "pick_stub", now), commanded)
+        return _hold(_fail(state, "no_wrist_egg", now), commanded, "no_wrist_egg")
+    return _hold(replace(_next_phase(state, "pick", now), pick=start_pick(now)), commanded)
+
+
+def _pick(state: CatchState, commanded: Pose, now: float, dt: float, limits: CatchLimits,
+          observation: Mapping[str, Any] | None, policy_act: PolicyAct | None) -> CatchStep:
+    """One policy action per frame, capped per arm key, base at zero; done or timeout -> to_release.
+    No runner: the stub (a notice, no motion). No observation yet: hold. Any runner error (or an
+    unusable action) is logged with its traceback and sends the arm back to the release pose."""
+    if policy_act is None:
+        return _hold(_next_phase(state, "to_release", now), commanded, "policy_stub")
+    if pick_timed_out(state.pick, now, limits.pick):
+        return _hold(_fail(state, "pick_timeout", now), commanded, "pick_timeout")
+    if observation is None:
+        return _hold(replace(state, updated_at=now), commanded)
+    try:
+        started = time.perf_counter()
+        proposed = policy_act(observation)
+        call_ms = (time.perf_counter() - started) * 1000.0
+        sent = pick_guard(commanded, proposed, dt, limits.pick.max_step_deg_s)
+        result = pick_result(state.pick, sent, proposed, now, limits.pick)
+        pick = advance_pick(state.pick, proposed, call_ms, limits.pick)
+    except Exception:
+        logger.exception("Pick policy failed; the arm returns to the release pose")
+        return _hold(_fail(state, "policy_error", now), commanded, "policy_error")
+    arm = {key: sent[key] for key in ARM_KEYS}
+    if result == "done":
+        return CatchStep(_next_phase(state, "to_release", now), zero_base(), arm, "pick_done")
+    if result == "timeout":
+        return CatchStep(_fail(state, "pick_timeout", now), zero_base(), arm, "pick_timeout")
+    return CatchStep(replace(state, pick=pick, updated_at=now), zero_base(), arm, "running")
 
 
 def _to_release(state: CatchState, commanded: Pose, now: float, dt: float, limits: CatchLimits) -> CatchStep:
@@ -190,11 +247,15 @@ def catch_step(
     commanded: Pose,
     now: float,
     limits: CatchLimits = DEFAULT_CATCH_LIMITS,
+    observation: Mapping[str, Any] | None = None,
+    policy_act: PolicyAct | None = None,
 ) -> CatchStep:
     """One frame of Auto Catch. `egg` is the newest front-camera egg (duck-typed cx, h), `wrist` the
     newest wrist-view check result (anything but None = egg in view; only read in `wrist_check`),
-    and `commanded` the last arm pose sent. Terminal outcomes return an idle state, zero base
-    velocities, and the arm pose to hold; an idle state holds the arm and changes nothing."""
+    `commanded` the last arm pose sent, `observation` the newest raw LeKiwi observation (RGB
+    frames as the client delivers them; only read in `pick`), and `policy_act` the pick policy
+    runner (None = stub). Terminal outcomes return an idle state, zero base velocities, and the arm
+    pose to hold; an idle state holds the arm and changes nothing."""
     dt = now - state.updated_at
     if state.phase == "to_start":
         return _to_start(state, commanded, now, dt, limits)
@@ -204,8 +265,8 @@ def catch_step(
         return _to_catch(state, commanded, now, dt, limits)
     if state.phase == "wrist_check":
         return _wrist_check(state, wrist, commanded, now, limits)
-    if state.phase == "pick_stub":  # Phase 3 placeholder for the pick policy runner: no arm motion
-        return _hold(_next_phase(state, "to_release", now), commanded, "policy_stub")
+    if state.phase == "pick":
+        return _pick(state, commanded, now, dt, limits, observation, policy_act)
     if state.phase == "to_release":
         return _to_release(state, commanded, now, dt, limits)
     return _hold(state, commanded)

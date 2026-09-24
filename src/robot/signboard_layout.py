@@ -27,9 +27,10 @@ ARM_TEXT = {
     "auto release": "arm auto release",
     "auto catch": "arm auto catch",
 }
-# Auto Catch phase on the mode line ("MANUAL - AUTO CATCH: to catch pose"); the stub is instantaneous.
+# Auto Catch phase on the mode line ("MANUAL - AUTO CATCH: to catch pose"; "picking 4 s" with the
+# pick time); the stub is instantaneous.
 PHASE_TEXT = {"to_start": "to start pose", "align": "aligning", "to_catch": "to catch pose",
-              "wrist_check": "checking", "pick_stub": "checking", "to_release": "to release pose"}
+              "wrist_check": "checking", "pick": "picking", "to_release": "to release pose"}
 SEPARATOR = "  |  "
 VOICE_TEXT = "mic on"
 STOPPED_TEXT = "STOPPED"
@@ -142,6 +143,8 @@ def _mode_text(status: DisplayStatus) -> str:
     action = ACTION_TEXT[status.action]
     if status.phase in PHASE_TEXT:
         action = f"{action}: {PHASE_TEXT[status.phase]}"
+    if status.phase_s is not None:
+        action = f"{action} {int(status.phase_s)} s"
     if status.progress is not None:
         action = f"{action} {round(100 * status.progress)}%"
     return f"{MODE_TEXT[status.mode]} - {action}" if action else MODE_TEXT[status.mode]
