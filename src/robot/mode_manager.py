@@ -3,19 +3,19 @@
 Pure and stdlib-only. Implements the decisions in docs/spec/operating-modes.md, section 2:
 `Stop` is a full stop and reset in every mode and latches a stopped state that only `Go Go!`
 releases (back to Manual Mode); otherwise `Go Go!` toggles Manual Mode and FSC with zero base
-velocities first, and presses are ignored while an automatic action runs. Phase 2: `Hi!` in
-Manual Mode checks the egg size (start_auto_catch) and starts the base alignment; `Thx` checks the
-basket size and the recorded home pose and release motion (start_auto_release) and starts Auto
-Release (auto_release.py). The catch itself and FSC are still display-only stubs.
+velocities first, and presses are ignored while an automatic action runs. `Hi!` in Manual Mode
+checks the egg size and the recorded catch and release poses (start_auto_catch) and starts Auto
+Catch (auto_catch.py: alignment, catch pose, wrist check, the pick-policy stub, release pose);
+`Thx` checks the basket size and the recorded home pose and release motion (start_auto_release)
+and starts Auto Release (auto_release.py). The pick policy and FSC are still display-only stubs.
 """
 
 from dataclasses import dataclass, replace
 from typing import Final, Literal
 
-from robot.align import AlignResult, AlignState, start_align
+from robot.auto_catch import CatchOutcome, CatchRequest, CatchState, start_catch
 from robot.auto_release import ReleaseOutcome, ReleaseRequest, ReleaseState, start_release
 from robot.config import NOTICE_SECONDS
-from robot.vision.egg_size import SizeClass
 
 Mode = Literal["manual", "fsc"]
 Action = Literal["none", "auto_catch", "auto_release"]
@@ -40,11 +40,17 @@ NOTICE_LISTENING: Final = "Listening..."
 NOTICE_VOICE_ENDED: Final = "Voice input ended"
 NOTICE_SIZE: Final = {"none": "No egg in view", "too_small": "Egg too far", "too_large": "Egg too close"}
 NOTICE_ALIGNING: Final = "Aligning..."
-NOTICE_ALIGN_RESULT: Final = {
-    "done": ("Aligned. Catch: not available yet", "info"),
+NOTICE_NO_CATCH: Final = "Catch pose not recorded"
+NOTICE_CATCH: Final = {
     "lost": ("Egg lost", "warning"),
-    "timeout": ("Could not align", "warning"),
+    "align_timeout": ("Could not align", "warning"),
+    "catch_timeout": ("Arm did not reach the catch pose", "warning"),
+    "no_wrist_egg": ("Egg not in wrist view", "warning"),
+    "policy_stub": ("Catch: policy not available yet", "info"),
+    "release_timeout": ("Arm did not reach the release pose", "warning"),
+    "done": ("Ready", "info"),
 }
+CATCH_TERMINAL: Final = ("lost", "align_timeout", "release_timeout", "done")
 NOTICE_CAPTURED: Final = "Captured"
 NOTICE_CAPTURE_FAILED: Final = "Capture failed"
 
@@ -54,8 +60,8 @@ NOTICE_LEVELS: Final = ("info", "warning")
 
 @dataclass(frozen=True)
 class AppState:
-    """Current mode, running action and its state (Auto Catch alignment, Auto Release), FSC voice
-    input, notice, and the Stop flag."""
+    """Current mode, running action and its state (Auto Catch, Auto Release), FSC voice input,
+    notice, and the Stop flag."""
 
     mode: Mode = "manual"
     action: Action = "none"
@@ -64,7 +70,7 @@ class AppState:
     notice_until: float = 0.0
     stopped: bool = False
     notice_level: NoticeLevel = "info"
-    align: AlignState = AlignState()
+    catch: CatchState = CatchState()
     release: ReleaseState = ReleaseState()
 
 
@@ -103,7 +109,7 @@ def _resume(state: AppState, now: float, notice_s: float) -> Transition:
 
 
 def _hi(state: AppState, now: float, notice_s: float) -> Transition:
-    if state.mode == "manual":  # needs the egg size: the loop routes it to start_auto_catch
+    if state.mode == "manual":  # needs the egg size and poses: the loop routes it to start_auto_catch
         return Transition(state=state)
     listening = not state.voice_listening
     notice = NOTICE_LISTENING if listening else NOTICE_VOICE_ENDED
@@ -124,8 +130,8 @@ def apply_command(state: AppState, command: str, now: float, notice_s: float = N
     `stop` always works, latches `stopped`, and cancels any action. While stopped, only
     `mode_toggle` does anything: it resumes Manual Mode. Other known commands are ignored while
     an action runs. Unknown commands leave the state unchanged. `hi` and `thx` in Manual Mode are
-    left unchanged here because they need the egg size (start_auto_catch) or the basket and the
-    recorded data (start_auto_release).
+    left unchanged here because they need the egg size and the recorded poses (start_auto_catch) or
+    the basket and the recorded data (start_auto_release).
     """
     if command == "stop":
         return _stop(now, notice_s)
@@ -139,29 +145,37 @@ def apply_command(state: AppState, command: str, now: float, notice_s: float = N
     return handler(state, now, notice_s)
 
 
-def start_auto_catch(state: AppState, size: SizeClass, now: float, notice_s: float = NOTICE_SECONDS) -> Transition:
-    """`Hi!` in Manual Mode with the latest front-camera size class.
+def start_auto_catch(
+    state: AppState, request: CatchRequest, now: float, notice_s: float = NOTICE_SECONDS
+) -> Transition:
+    """`Hi!` in Manual Mode with the latest front-camera size class and the recorded poses.
 
-    Anything but "ok" shows a warning notice and nothing moves; "ok" starts the alignment. Only
-    in Manual Mode, not stopped, and with no action running; otherwise the state is unchanged.
+    A size other than "ok", a missing catch pose, or a missing release pose (home) shows a warning
+    notice and nothing moves; otherwise the alignment starts. Only in Manual Mode, not stopped, and
+    with no action running; otherwise the state is unchanged.
     """
     if state.mode != "manual" or state.stopped or state.action != "none":
         return Transition(state=state)
-    if size != "ok":
-        return Transition(state=with_notice(state, NOTICE_SIZE[size], now, notice_s, "warning"))
-    started = replace(state, action="auto_catch", align=start_align(now))
+    if request.size != "ok":
+        return Transition(state=with_notice(state, NOTICE_SIZE[request.size], now, notice_s, "warning"))
+    if request.catch is None:
+        return Transition(state=with_notice(state, NOTICE_NO_CATCH, now, notice_s, "warning"))
+    if request.home is None:
+        return Transition(state=with_notice(state, NOTICE_NO_HOME, now, notice_s, "warning"))
+    started = replace(state, action="auto_catch", catch=start_catch(now, request.catch, request.home))
     return Transition(state=with_notice(started, NOTICE_ALIGNING, now, notice_s), disengage_arm=True)
 
 
-def finish_auto_catch(
-    state: AppState, result: AlignResult, now: float, notice_s: float = NOTICE_SECONDS
-) -> Transition:
-    """End the alignment with a terminal result: back to Manual Mode with zero base velocities
-    this frame and arm following disengaged (it re-syncs slowly). "running" changes nothing."""
-    if result not in NOTICE_ALIGN_RESULT or state.action != "auto_catch":
+def catch_notice(state: AppState, outcome: CatchOutcome, now: float, notice_s: float = NOTICE_SECONDS) -> Transition:
+    """Apply an Auto Catch outcome: "running" changes nothing, a non-terminal outcome only shows its
+    notice (the action goes on), and a terminal outcome returns to Manual Mode with zero base
+    velocities this frame and arm following disengaged (it re-syncs to the leader slowly)."""
+    if outcome not in NOTICE_CATCH or state.action != "auto_catch":
         return Transition(state=state)
-    notice, level = NOTICE_ALIGN_RESULT[result]
-    ended = replace(state, action="none", align=AlignState())
+    notice, level = NOTICE_CATCH[outcome]
+    if outcome not in CATCH_TERMINAL:
+        return Transition(state=with_notice(state, notice, now, notice_s, level))
+    ended = replace(state, action="none", catch=CatchState())
     return Transition(state=with_notice(ended, notice, now, notice_s, level), stop_base=True, disengage_arm=True)
 
 

@@ -1,6 +1,6 @@
 """src/robot/display_status.py: What the signboard shows about modes, the arm, and the egg, as data.
 
-A frozen DisplayStatus travels from the control loop to the signboard child over the pipe
+A frozen DisplayStatus (including the Auto Catch phase for the mode line) travels from the control loop to the signboard child over the pipe
 (signboard_protocol.py) and is turned into status text by signboard_layout.py. Overlays are
 normalized shapes drawn on a camera view: the Auto Catch target (the egg-shaped guide on the
 front view), the best egg detection, the pink basket (a rectangle), and, only while Auto Release
@@ -11,6 +11,7 @@ child must never load LeRobot or cv2).
 from dataclasses import dataclass
 from typing import Final, Literal
 
+from robot.auto_catch import CatchPhase
 from robot.auto_release import release_progress
 from robot.config import ALIGN_TARGET_CX, ALIGN_TARGET_CY, ALIGN_TARGET_H, ALIGN_TARGET_W, FRONT_CAMERA_KEY
 from robot.mode_manager import Action, AppState, Mode, NoticeLevel
@@ -18,8 +19,8 @@ from robot.vision.basket_size import BasketDetection
 from robot.vision.config_vision import RELEASE_TARGET_CX, RELEASE_TARGET_CY, RELEASE_TARGET_H, RELEASE_TARGET_W
 from robot.vision.egg_size import EggDetection, classify_size
 
-ArmStatus = Literal["holding", "syncing", "following", "leader fault", "no leader", "auto release"]
-ARM_STATUSES: Final = ("holding", "syncing", "following", "leader fault", "no leader", "auto release")
+ArmStatus = Literal["holding", "syncing", "following", "leader fault", "no leader", "auto release", "auto catch"]
+ARM_STATUSES: Final = ("holding", "syncing", "following", "leader fault", "no leader", "auto release", "auto catch")
 # Ellipses: the egg target and detections. Rectangles: the basket and the Auto Release target.
 OverlayKind = Literal["egg_ok", "egg_out", "target", "basket", "release_target"]
 OVERLAY_KINDS: Final = ("egg_ok", "egg_out", "target", "basket", "release_target")
@@ -49,8 +50,8 @@ class Overlay:
 @dataclass(frozen=True)
 class DisplayStatus:
     """Mode, running action, FSC voice input, notice and its level, arm status, Stop latch, overlays,
-    seconds of release motion recorded so far (None when not recording), and Auto Release
-    playback progress 0..1 (None when not playing)."""
+    seconds of release motion recorded so far (None when not recording), Auto Release playback
+    progress 0..1 (None when not playing), and the Auto Catch phase ("" when it is not running)."""
 
     mode: Mode = "manual"
     action: Action = "none"
@@ -62,6 +63,7 @@ class DisplayStatus:
     overlays: tuple[Overlay, ...] = ()
     recording_s: float | None = None
     progress: float | None = None
+    phase: CatchPhase | Literal[""] = ""
 
 
 TARGET_OVERLAY: Final = Overlay(FRONT_CAMERA_KEY, ALIGN_TARGET_CX, ALIGN_TARGET_CY, ALIGN_TARGET_W, ALIGN_TARGET_H,
@@ -104,7 +106,7 @@ def display_status(
     app: AppState, arm_status: ArmStatus, overlays: tuple[Overlay, ...] = (), recording_s: float | None = None
 ) -> DisplayStatus:
     """The displayable part of the application state plus the arm status, overlays, the recording
-    time, and the Auto Release playback progress."""
+    time, the Auto Release playback progress, and the Auto Catch phase."""
     return DisplayStatus(
         mode=app.mode,
         action=app.action,
@@ -116,4 +118,5 @@ def display_status(
         overlays=overlays,
         recording_s=recording_s,
         progress=release_progress(app.release) if app.action == "auto_release" else None,
+        phase=app.catch.phase if app.action == "auto_catch" else "",
     )

@@ -6,7 +6,8 @@ front view it draws the overlays: the Auto Catch target as an egg-shaped outline
 egg here", the detected egg (green outline when usable, accent color otherwise), the pink basket
 (a labelled rectangle), and the Auto Release basket target (thin rectangle, only while it runs).
 The window keeps keyboard focus so KachiButton phrases arrive as text input; pump() returns that
-text, the staff keys (KEYDOWN: capture `c`, save home pose `b`, record release `r`), and whether
+text, the staff keys (KEYDOWN: capture `c`, save home pose `b`, save catch pose `k`, record release
+`r`), and whether
 ESC or the window close button ended Manual Mode. Layout and text live in signboard_layout.py;
 this module only draws and never blocks.
 """
@@ -24,6 +25,7 @@ import pygame  # noqa: E402
 
 from robot.config import (
     CAPTURE_KEY,
+    CATCH_POSE_KEY,
     DEFAULT_THEME,
     HOME_KEY,
     RECORD_KEY,
@@ -68,13 +70,14 @@ THIN_LINE_PX = 1  # the Auto Release basket target
 @dataclass(frozen=True)
 class PumpResult:
     """Outcome of one event pump: False after ESC or window close, text typed meanwhile, and
-    whether the capture, save-home, and record keys were pressed."""
+    whether the capture, save-home, record, and save-catch keys were pressed."""
 
     keep_running: bool
     typed: str = ""
     capture: bool = False
     save_home: bool = False
     toggle_record: bool = False
+    save_catch: bool = False
 
 
 def _to_pygame_rect(rect: Rect) -> pygame.Rect:
@@ -160,7 +163,8 @@ class SignboardView:
         return PumpResult(keep_running=not any(_is_exit(event) for event in events), typed=typed,
                           capture=any(_is_key(event, CAPTURE_KEY) for event in events),
                           save_home=any(_is_key(event, HOME_KEY) for event in events),
-                          toggle_record=any(_is_key(event, RECORD_KEY) for event in events))
+                          toggle_record=any(_is_key(event, RECORD_KEY) for event in events),
+                          save_catch=any(_is_key(event, CATCH_POSE_KEY) for event in events))
 
     def close(self) -> None:
         if self._screen is None:

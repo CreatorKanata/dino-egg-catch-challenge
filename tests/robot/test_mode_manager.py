@@ -2,33 +2,26 @@
 
 Each KachiButton command is applied to a frozen AppState; the tests pin down every rule in the
 spec (Stop and its latch, resume by Go Go!, mode toggle, Thx routing and FSC voice toggle,
-ignore-while-action, notice expiry) as recorded in docs/spec/operating-modes.md, plus the Phase 2
-Auto Catch start (egg-size precondition alerts) and its terminal results. Auto Release start and
-outcomes are in test_mode_manager_release.py.
+ignore-while-action, notice expiry) as recorded in docs/spec/operating-modes.md. Auto Catch start
+and outcomes are in test_mode_manager_catch.py, Auto Release in test_mode_manager_release.py.
 """
 
 from dataclasses import replace
 import unittest
 
-from robot.align import AlignState, start_align
-from robot.config import NOTICE_SECONDS
-from robot.mode_manager import (
-    AppState,
-    apply_command,
-    expire_notice,
-    finish_auto_catch,
-    manual_control_allowed,
-    start_auto_catch,
-    with_notice,
-)
+from robot.auto_catch import CatchRequest, start_catch
+from robot.config import ARM_KEYS, NOTICE_SECONDS
+from robot.mode_manager import AppState, apply_command, expire_notice, manual_control_allowed, start_auto_catch
+from robot.mode_manager import with_notice
 
 FSC = AppState(mode="fsc")
+POSE = {key: 0.0 for key in ARM_KEYS}
 
 
 class StopTests(unittest.TestCase):
     def test_stop_resets_everything_from_any_state(self):
         busy = AppState(mode="fsc", action="auto_catch", voice_listening=True, notice="x", notice_until=1.0,
-                        notice_level="warning", align=start_align(0.0))
+                        notice_level="warning", catch=start_catch(0.0, POSE, POSE))
         for start in (AppState(), busy):
             with self.subTest(start=start):
                 result = apply_command(start, "stop", 10.0)
@@ -120,7 +113,7 @@ class StopLatchAndUnknownTests(unittest.TestCase):
 
 class NoticeAndControlTests(unittest.TestCase):
     def test_notice_expires_after_deadline(self):
-        state = start_auto_catch(AppState(), "none", 1.0).state
+        state = start_auto_catch(AppState(), CatchRequest(), 1.0).state
         self.assertEqual(expire_notice(state, 1.0 + NOTICE_SECONDS), state)
         cleared = expire_notice(state, 1.0 + NOTICE_SECONDS + 0.01)
         self.assertEqual((cleared.notice, cleared.notice_until, cleared.notice_level), ("", 0.0, "info"))
@@ -139,56 +132,6 @@ class NoticeAndControlTests(unittest.TestCase):
         self.assertFalse(manual_control_allowed(FSC))
         self.assertFalse(manual_control_allowed(AppState(stopped=True)))
         self.assertFalse(manual_control_allowed(AppState(action="auto_catch")))
-
-
-class AutoCatchTests(unittest.TestCase):
-    def test_rejected_sizes_show_a_warning_and_do_not_start(self):
-        cases = (("none", "No egg in view"), ("too_small", "Egg too far"), ("too_large", "Egg too close"))
-        for size, notice in cases:
-            with self.subTest(size=size):
-                result = start_auto_catch(AppState(), size, 1.0)
-                self.assertEqual(result.state, AppState(notice=notice, notice_until=1.0 + NOTICE_SECONDS,
-                                                        notice_level="warning"))
-                self.assertFalse(result.stop_base or result.disengage_arm)
-
-    def test_ok_starts_alignment(self):
-        result = start_auto_catch(AppState(), "ok", 2.0)
-        self.assertEqual(result.state.action, "auto_catch")
-        self.assertEqual(result.state.align, start_align(2.0))
-        self.assertEqual((result.state.notice, result.state.notice_level), ("Aligning...", "info"))
-        self.assertTrue(result.disengage_arm)
-
-    def test_start_ignored_in_fsc_while_stopped_or_busy(self):
-        busy = AppState(action="auto_catch", align=start_align(0.0))
-        for state in (FSC, AppState(stopped=True), busy):
-            with self.subTest(state=state):
-                self.assertEqual(start_auto_catch(state, "ok", 1.0).state, state)
-
-    def test_terminal_results_return_to_manual_mode(self):
-        busy = AppState(action="auto_catch", align=start_align(0.0))
-        cases = (("done", "Aligned. Catch: not available yet", "info"), ("lost", "Egg lost", "warning"),
-                 ("timeout", "Could not align", "warning"))
-        for result, notice, level in cases:
-            with self.subTest(result=result):
-                finished = finish_auto_catch(busy, result, 3.0)
-                self.assertEqual(finished.state, AppState(notice=notice, notice_until=3.0 + NOTICE_SECONDS,
-                                                          notice_level=level))
-                self.assertTrue(finished.stop_base and finished.disengage_arm)
-
-    def test_running_or_idle_finish_changes_nothing(self):
-        busy = AppState(action="auto_catch", align=start_align(0.0))
-        self.assertEqual(finish_auto_catch(busy, "running", 1.0).state, busy)
-        self.assertEqual(finish_auto_catch(AppState(), "done", 1.0).state, AppState())
-
-    def test_presses_ignored_and_stop_cancels_while_aligning(self):
-        busy = start_auto_catch(AppState(), "ok", 1.0).state
-        for command in ("hi", "thx", "mode_toggle"):
-            with self.subTest(command=command):
-                self.assertEqual(apply_command(busy, command, 2.0).state, busy)
-        stopped = apply_command(busy, "stop", 2.0)
-        self.assertEqual((stopped.state.action, stopped.state.align, stopped.state.stopped),
-                         ("none", AlignState(), True))
-        self.assertTrue(stopped.stop_base)
 
 
 if __name__ == "__main__":

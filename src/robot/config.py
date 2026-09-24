@@ -69,7 +69,8 @@ TOP_CAMERA_COLOR_MODE: Final = "bgr"
 PiCameraColorOrder = Literal["rgb", "bgr"]
 PI_CAMERA_COLOR_ORDER: PiCameraColorOrder = "rgb"
 FRONT_CAMERA_KEY: Final = "front"
-PI_CAMERA_KEYS: Final = (FRONT_CAMERA_KEY, "wrist")
+WRIST_CAMERA_KEY: Final = "wrist"
+PI_CAMERA_KEYS: Final = (FRONT_CAMERA_KEY, WRIST_CAMERA_KEY)
 
 # --- Arm during Manual Mode -----------------------------------------------------------------
 # The fork's host writes Goal_Position for every action and fails on an empty arm key set, so
@@ -233,19 +234,22 @@ CAPTURE_DIR: Final = "captures"
 CAPTURE_KEY: Final = "c"
 CAPTURE_COMMAND: Final = "capture"  # signboard -> parent command line for the capture key
 
-# --- Auto Release (Phase 2): home pose, recorded release motion, staff keys ------------------
+# --- Arm data: release pose (home), release motion, catch pose (Phase 3), staff keys ----------
 # Basket detector, basket alignment target, and tolerances: robot/vision/config_vision.py.
 # Data files (JSON recorded on the robot with the keys below), relative to the repository root.
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 HOME_POSE_PATH: Final = "data/arm/home_pose.json"
 RELEASE_MOTION_PATH: Final = "data/arm/release_motion.json"
+CATCH_POSE_PATH: Final = "data/arm/catch_pose.json"  # head down: the wrist camera sees the aligned egg
 # Staff keys (KEYDOWN in the signboard, like CAPTURE_KEY). Not "h": the KachiButton types the "h"
 # of "Thx" and "Hi!" as key presses too, so every Thx/Hi! would overwrite the home pose.
 HOME_KEY: Final = "b"  # save the commanded arm pose as the home (base) pose
 RECORD_KEY: Final = "r"  # start / stop recording the release motion
+CATCH_POSE_KEY: Final = "k"  # save the commanded arm pose as the catch pose
 SAVE_HOME_COMMAND: Final = "save_home"
+SAVE_CATCH_COMMAND: Final = "save_catch"
 TOGGLE_RECORD_COMMAND: Final = "toggle_record"
-RELEASE_HOME_TIMEOUT_S: Final = 8.0  # arm approach to the home pose (and the motion's start)
+RELEASE_HOME_TIMEOUT_S: Final = 8.0  # arm approach to a recorded pose (home, catch, the motion's start)
 RELEASE_PLAYBACK_SPEED: Final = 1.0  # 1.0 = recorded speed; 0.5 was used for the first robot test (2026-09-25), which the owner found slow
 RELEASE_MAX_JOINT_STEP_DEG_PER_S: Final = 90.0  # playback: per-frame change cap on every joint
 RECORD_MAX_S: Final = 30.0  # a release recording stops and saves itself at this length
@@ -284,10 +288,10 @@ if any(ALIGN_MAX_XY * min(1.0, tol / full) < ALIGN_MIN_XY - 1e-9 for tol, full i
     raise ValueError("Need ALIGN_MAX_XY * min(1, tolerance / full-speed error) >= ALIGN_MIN_XY at every edge")
 if min(ALIGN_DONE_FRAMES, ALIGN_LOST_FRAMES, DETECT_TIMING_FRAMES) < 1 or not ALIGN_TIMEOUT_S > 0:
     raise ValueError("Alignment frame counts must be >= 1 and ALIGN_TIMEOUT_S positive")
-_STAFF_KEYS = (CAPTURE_KEY, HOME_KEY, RECORD_KEY)
+_STAFF_KEYS = (CAPTURE_KEY, HOME_KEY, RECORD_KEY, CATCH_POSE_KEY)
 if len({key.lower() for key in _STAFF_KEYS}) != len(_STAFF_KEYS) or any(
         len(key) != 1 or any(key.lower() in phrase.lower() for phrase, _ in KACHI_PHRASES) for key in _STAFF_KEYS):
-    raise ValueError("CAPTURE_KEY, HOME_KEY, RECORD_KEY: distinct single characters no KachiButton phrase contains")
+    raise ValueError("Staff keys: distinct single characters that no KachiButton phrase contains")
 if not 0 < RELEASE_PLAYBACK_SPEED <= 2:
     raise ValueError("RELEASE_PLAYBACK_SPEED must be in (0, 2]")
 if not (RELEASE_HOME_TIMEOUT_S > 0 and RELEASE_MAX_JOINT_STEP_DEG_PER_S > 0 and RECORD_MAX_S > 0):

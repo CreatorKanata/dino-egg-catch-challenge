@@ -89,11 +89,12 @@ Do not send the overhead camera through `LeKiwiClientConfig.cameras`. That field
 
 ## 5. Application layout (implemented, unit-tested without hardware)
 
-Following the working agreements (single-purpose modules, 300-line limit, tunables in `config.py`, hardware-independent tests). The operating modes (Manual Mode, Auto Catch, Auto Release, Full Self-Catching (FSC)) and the KachiButton controls are specified in [spec/operating-modes.md](spec/operating-modes.md). Phase 1 is implemented: Manual Mode (base driving with the dino-controller plus leader-arm puppeteering with slow engagement), the mode manager, KachiButton phrase detection through the signboard, and the mode text on the signboard. Phase 2 step 1 (unit-tested only, not yet run on the robot): `Hi!` in Manual Mode checks the front-camera egg detection (precondition alerts) and aligns the base to the best egg position; `Thx` runs Auto Release (basket precondition, base alignment to the basket, home pose with the egg held, recorded release motion played slowly; unit-tested only, the home pose and motion are recorded by staff into `data/arm/`); the catch itself and FSC are still display-only stubs. Details, run commands, the KachiButton table, and the input mapping are in [src/robot/README.md](../src/robot/README.md).
+Following the working agreements (single-purpose modules, 300-line limit, tunables in `config.py`, hardware-independent tests). The operating modes (Manual Mode, Auto Catch, Auto Release, Full Self-Catching (FSC)) and the KachiButton controls are specified in [spec/operating-modes.md](spec/operating-modes.md). Phase 1 is implemented: Manual Mode (base driving with the dino-controller plus leader-arm puppeteering with slow engagement), the mode manager, KachiButton phrase detection through the signboard, and the mode text on the signboard. Phase 2 step 1 (unit-tested only, not yet run on the robot): `Hi!` in Manual Mode checks the front-camera egg detection (precondition alerts) and aligns the base to the best egg position; `Thx` runs Auto Release (basket precondition, base alignment to the basket, home pose with the egg held, recorded release motion played slowly; unit-tested only, the home pose and motion are recorded by staff into `data/arm/`); FSC is still a display-only stub. Phase 3 step 1 (unit-tested only): after the alignment, Auto Catch moves the arm slowly to the recorded catch pose, optionally checks the wrist view for the egg (disabled by default), runs a pick-policy stub, and returns to the release pose. Details, run commands, the KachiButton table, and the input mapping are in [src/robot/README.md](../src/robot/README.md).
 
 ```
 pyproject.toml               # LeRobot fork [lekiwi,viz] + pyserial + pygame-ce; uv package = false
-data/arm/                    # Auto Release data recorded on the robot (staff keys b / r): home_pose.json, release_motion.json
+data/arm/                    # arm data recorded on the robot (staff keys b / r / k): home_pose.json (release pose),
+                             # release_motion.json, catch_pose.json
 src/robot/
   config.py                  # Pi address, ZMQ ports, serial ports, leader arm, KachiButton phrases, speed levels, roles
   dino_controller_reader.py  # serial JSON v0 lines -> immutable ControllerState (stdlib + lazy pyserial)
@@ -104,8 +105,9 @@ src/robot/
   align.py                   # base alignment (egg: cx + height; basket: cx + width): tapered speed, smoothing, rate limit; pure
   arm_follow.py              # slow engagement toward the leader pose, then following; approach_pose / within; pure
   auto_release.py            # Auto Release state machine: align, home (gripper kept), play, return home; pure
+  auto_catch.py              # Auto Catch state machine: align, catch pose, wrist check, policy stub, release pose; pure
   arm_motions.py             # home pose / release motion files: validate, resample, time-scale, atomic write (stdlib)
-  arm_store.py               # staff keys b (save home) and r (record release); loads the files at Thx (stdlib)
+  arm_store.py               # staff keys b (save home), k (save catch), r (record release); loads files at Thx / Hi!
   manual_mode.py             # per-frame composition: commands, alignment, base action, arm pose, arm status; pure
   display_status.py          # frozen DisplayStatus and overlays (target guide, egg) sent to the signboard; pure
   vision/
@@ -120,8 +122,9 @@ src/robot/
     top_frame.py             # overhead 1280x720 -> 960x540 once per frame (lazy OpenCV)
     timing.py                # one-time detector timing log; pure
     align_trace.py           # per-frame alignment CSV trace in captures/ (stdlib)
+    wrist_check.py           # Auto Catch wrist-view check: full egg or a ringed spot cluster (lazy OpenCV)
     capture.py               # `c` key: save raw frames + detections to captures/ (lazy OpenCV)
-    inspect.py               # offline CLI: python -m robot.vision.inspect <image.png> [--rgb] [--debug] [--basket]
+    inspect.py               # offline CLI: python -m robot.vision.inspect <image.png> [--rgb] [--debug] [--basket] [--wrist]
   leader_arm.py              # SO100Leader wrapper: read_pose() -> six arm_* keys or None (lazy LeRobot)
   top_camera.py              # OpenCVCamera wrapper for the overhead view (1280x720, 16:9: full field of view)
   lekiwi_adapter.py          # LeKiwiClient wrapper: connect + capture arm pose, observe, send base + arm pose, stop
@@ -146,6 +149,8 @@ tests/robot/
   test_arm_follow.py
   test_manual_mode.py
   test_auto_release.py
+  test_auto_catch.py
+  test_mode_manager_catch.py
   test_mode_manager_release.py
   test_arm_motions.py
   test_arm_store.py
@@ -157,6 +162,7 @@ tests/robot/
   test_drive_loop.py
   test_drive_loop_auto_catch.py
   test_drive_loop_release.py
+  test_drive_loop_catch.py
   loop_fakes.py              # fake devices shared by the loop tests
   test_signboard_protocol.py
   test_signboard_client.py
@@ -166,6 +172,7 @@ tests/robot/
     test_capture_inspect.py
     test_top_frame.py
     test_basket_detector.py
+    test_wrist_check.py
 ```
 
 The dino-controller protocol is specified in [dino-controller-protocol.md](dino-controller-protocol.md). The reader buffers to LF, tolerates ESP32 boot text, requires a combined `state` snapshot before applying input, replaces the cached joystick state on every `joystick` or `state` message, and drops held inputs after `ready`, `error`, or a sequence gap. Held directions are not repeated, so the action mapper works from the latest cached state at loop rate rather than from events. Because unchanged inputs produce no traffic, the reader sends `STATE` every 0.2 s so that a 0.5 s silence reliably means input loss.
@@ -192,23 +199,43 @@ Input loss, `Stop` (latched until `Go Go!`), mode switches, and the optional Cat
 
 ## 6. Recording data and training (done in the fork)
 
-Recording uses the fork's CLI with the client robot and the leader arm as the teleoperator, following the upstream LeKiwi guide at `docs/source/lekiwi.mdx`:
+Owner decisions (2026-09-25, [spec/operating-modes.md](spec/operating-modes.md), section 4): the `pick_egg` demonstrations are recorded with the fork's `lerobot-record`, not inside this application, from the catch pose until the egg is held. The application reproduces that start state at demo time through the base alignment and the catch pose (Auto Catch, [src/robot/README.md](../src/robot/README.md)). Training runs on Google Colab from the Hugging Face dataset (owner decision, 2026-09-25); the notebook will be added to the fork later.
+
+**Start state of every episode.**
+
+- The robot is parked on a floor mark taped on the tarp.
+- The egg is placed at the marked best position: the app's `place the egg here` outline when the app runs (mark the spot on the tarp with tape once), with deliberate offsets inside the alignment tolerance, about ±3 cm sideways and ±3 cm in depth.
+- The arm is at the catch pose (head down, egg in the wrist view). Put the leader arm at the catch pose before starting so the follower does not jump to it.
+
+**Command** (from the fork root in the `lerobot312` env; close this application first, because it holds the robot connection; the Mac must be logged in to Hugging Face first with `hf auth login`, the command huggingface_hub 1.32.0 in `lerobot312` provides, since `huggingface-cli` there only prints that it is deprecated and no longer works):
 
 ```bash
 lerobot-record \
   --robot.type=lekiwi_client --robot.remote_ip=10.102.6.48 --robot.id=dino_kiwi \
   --teleop.type=so100_leader --teleop.port=/dev/tty.usbmodem5A7A0179021 --teleop.id=dino_leader_arm \
-  --dataset.repo_id=<user>/dino_pick_egg --dataset.num_episodes=50 --dataset.single_task="Pick up the egg"
+  --dataset.repo_id=CreatorKanata/dino_pick_egg --dataset.num_episodes=60 \
+  --dataset.single_task="Pick up the egg with the mouth" \
+  --dataset.episode_time_s=20 --dataset.reset_time_s=15 --dataset.fps=30 \
+  --dataset.push_to_hub=true --dataset.no_stamp=true
 ```
 
-Constraints to plan around:
+Flag names verified on 2026-09-25 by reading the fork (`src/lerobot/scripts/lerobot_record.py`, `src/lerobot/configs/dataset.py`, the LeKiwi and SO leader configs); `lerobot-record --help` itself fails in `lerobot312` because the `dataset` extra (`datasets` package) is not installed there, so install it (owner approval needed) before recording.
 
-- `lerobot-record` stores only the cameras the client declares, so recorded episodes contain `front` and `wrist`. Including the overhead camera in a dataset needs either a host-side camera on the Pi or a wrapper robot class; treat that as fork work if it becomes necessary.
-- The concept notes that a wrist-only ACT policy outperformed front+wrist on the golf-ball test. Start `pick_egg` with the wrist camera and add `front` only after a comparison.
-- Skill boundaries (`pick_egg`, `place_in_basket`), start and end conditions, and success checks are defined in the Gemini integration document, section 7. Recording sessions should reproduce those start conditions.
-- Training and evaluation commands, policy choice, and step counts are covered by the fork's `AGENT_GUIDE.md`.
+- `RecordConfig`: `robot`, `dataset`, `teleop` (one teleoperator), `display_data`, `display_mode`, `display_ip`, `display_port`, `display_compressed_images`, `play_sounds`, `resume`.
+- `DatasetRecordConfig`: `repo_id`, `single_task`, `root`, `fps` (default 30), `episode_time_s` (60), `reset_time_s` (60), `num_episodes` (50), `video`, `push_to_hub` (default true), `private`, `tags`, `num_image_writer_processes`, `num_image_writer_threads_per_camera`, `video_encoding_batch_size`, `rgb_encoder`, `depth_encoder`, `streaming_encoding`, `encoder_queue_maxsize`, `encoder_threads`, `no_stamp`.
+- `lekiwi_client`: `remote_ip`, `port_zmq_cmd`, `port_zmq_observations`, `cameras`, and `id`; `so100_leader`: `port` and `id`.
+- `--dataset.no_stamp=true` keeps the repository name as given. Without it, `lerobot-record` appends a date-time tag to `repo_id` and would push to a new repository instead of `CreatorKanata/dino_pick_egg`. A later session adds episodes to the same dataset with `--resume=true`.
+- Keys while recording (fork `utils/keyboard_input.py`): right arrow ends the episode early, left arrow re-records it, ESC stops and uploads.
 
-The application later loads the resulting checkpoint through a policy-execution component that feeds `wrist` frames and joint state, and that can be interrupted mid-sequence. That component is not designed yet.
+**Known blocker (code reading, not run on the robot).** With a single `so100_leader` teleoperator, `record_loop` sends the leader's keys as they are (`shoulder_pan.pos`, ...), without the `arm_` prefix and without base velocities. The host's `LeKiwi.send_action` then fails on the missing `x.vel` (logged as "Message fetching failed", so the arm does not move), and `build_dataset_frame` fails on the first frame because the dataset's action names are `arm_shoulder_pan.pos` and so on. Only the list form (one arm teleoperator plus a `KeyboardTeleop`, `robot.name == "lekiwi_client"`) adds the prefix and the base keys, and the CLI cannot express a list. Before the first session, either change the fork (a teleop action step that adds the `arm_` prefix and zero base velocities for `lekiwi_client`) or use the fork's `examples/lekiwi/record.py` with its constants set to the values above (it uses the list form; the keyboard base teleop needs the macOS Accessibility permission). Verify with one short episode either way.
+
+**Episode.** From the catch pose, teleoperate with the leader arm until the egg is held in the mouth and lifted slightly, still head down, and end the episode there (right arrow). Do not raise the arm to the release pose: the application does that. Mix green and red eggs about half and half. Target 60 episodes, more if the success rate is low.
+
+**Data.** `lerobot-record` stores only the cameras the client declares, so episodes contain `front` and `wrist` (640x480 each) plus the arm and base state and actions. Training on `wrist` only (owner decision, consistent with the golf-ball result in the concept) is a policy-configuration choice in the fork; see the fork's `AGENT_GUIDE.md` for training commands, policy choice, and step counts. Including the overhead camera would need a host-side camera or a wrapper robot class (fork work).
+
+**Evaluation.** Keep 10 percent of the episodes as held-out. Success means the egg is held at the end of the episode.
+
+The application later loads the resulting checkpoint through a policy runner that feeds `wrist` frames and joint state from the catch pose and can be interrupted by `Stop`; until then Auto Catch runs a stub in its place ("Catch: policy not available yet"). That component is Phase 3 work and not designed yet.
 
 ## 7. Safety rules for application code
 
@@ -223,4 +250,4 @@ Verified on 2026-09-24: host start command, ZMQ ports, action and observation ke
 
 Implemented, unit-tested without hardware: the Manual Mode module layout in section 5 (controller reader, action mapper, drive state with the encoder rotation budget, adapter action content with a fake client, KachiButton phrase detection, the mode manager with the Stop latch, leader-arm slow engagement and following with a fake teleoperator, and the signboard command channel). Owner-tested on the robot (2026-09-24): Manual Mode end to end, including catching an egg with the leader arm, `Go Go!` mode switching from a KachiButton in the real signboard window, and the slow re-synchronization after FSC. `Stop` on the second KachiButton is not yet reported. The joystick, encoder, and speed-level roles are owner decisions (2026-09-24); one click turns the base by half the knob's own angle per click (360° / detents × 0.5; currently assumed 20 detents = 9°), open-loop; the detent count needs the counted test. The hardware modules import and `python -m robot.teleop_drive --help` runs in the `lerobot312` environment. Owner-tested on the robot (2026-09-24): driving the base with the dino-controller (Manual Mode's base-driving half) works as reported by the owner; the rotation angle per click, the overhead camera, and the on-screen signboard were not separately reported.
 
-Assumed or proposed: the engagement speed and tolerance, the encoder detent count (20 assumed) and rotation cap, the empty-arm-action failure (code reading only), the recording command's dataset arguments, and every statement about policy execution. Update this document when those become implementation.
+Assumed or proposed: the engagement speed and tolerance, the encoder detent count (20 assumed) and rotation cap, the empty-arm-action failure (code reading only), the recording command's dataset values (episode count and times), the single-teleoperator recording blocker in section 6 (code reading only), and every statement about policy execution. Update this document when those become implementation.

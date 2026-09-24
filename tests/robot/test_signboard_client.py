@@ -133,7 +133,7 @@ class IsolationTests(unittest.TestCase):
             "import robot.align, robot.mode_manager, robot.manual_mode, robot.display_status\n"
             "import robot.vision.egg_size, robot.vision.timing, robot.vision.align_trace\n"
             "import robot.auto_release, robot.arm_motions, robot.arm_store, robot.arm_follow\n"
-            "import robot.vision.basket_size, robot.vision.config_vision\n"
+            "import robot.vision.basket_size, robot.vision.config_vision, robot.auto_catch\n"
             "loaded = [name for name in ('cv2', 'numpy', 'pygame', 'lerobot') if name in sys.modules]\n"
             "assert not loaded, loaded\n"
         )
@@ -144,7 +144,7 @@ class IsolationTests(unittest.TestCase):
             "import sys\n"
             "import robot.drive_loop, robot.vision.egg_detector, robot.vision.capture, robot.vision.frames\n"
             "import robot.vision.top_frame, robot.vision.egg_masks, robot.vision.spot_edges\n"
-            "import robot.vision.basket_detector\n"
+            "import robot.vision.basket_detector, robot.vision.wrist_check\n"
             "assert 'cv2' not in sys.modules and 'pygame' not in sys.modules\n"
         )
         self.assertEqual(result.returncode, 0, result.stderr.decode())

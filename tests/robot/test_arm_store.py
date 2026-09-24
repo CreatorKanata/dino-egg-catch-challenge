@@ -1,9 +1,10 @@
-"""tests/robot/test_arm_store.py: Checks of the staff keys that record the Auto Release data.
+"""tests/robot/test_arm_store.py: Checks of the staff keys that record the arm data (Auto Release, Auto Catch).
 
-The save-home key writes the commanded pose, the record key starts and stops a recording that is
+The save-home key writes the commanded pose, the save-catch key writes the catch pose only in
+Manual Mode with the arm following and no action running, the record key starts and stops a recording that is
 written as a valid motion file with one backup, recording is refused outside Manual Mode or when
 the arm is not following and cancelled when following stops, write failures are shown and never
-raised, and the Thx loader turns missing or invalid files into None. Temporary paths only.
+raised, and the Thx and Hi! loaders turn missing or invalid files into None. Temporary paths only.
 """
 
 import json
@@ -14,8 +15,8 @@ import unittest
 
 from robot.arm_motions import load_motion, load_pose
 from robot.arm_store import ArmDataPaths, RecordingState, handle_staff_keys, load_release_request, recording_seconds
-from robot.arm_store import wants_release
-from robot.config import ARM_KEYS, LOOP_HZ, SAVE_HOME_COMMAND, TOGGLE_RECORD_COMMAND
+from robot.arm_store import load_catch_request, wants_catch, wants_release
+from robot.config import ARM_KEYS, LOOP_HZ, SAVE_CATCH_COMMAND, SAVE_HOME_COMMAND, TOGGLE_RECORD_COMMAND
 from robot.mode_manager import AppState
 
 POSE = {key: float(index) for index, key in enumerate(ARM_KEYS)}
@@ -26,7 +27,8 @@ class StaffKeyTests(unittest.TestCase):
         self.folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
         self.paths = ArmDataPaths(home=self.folder / "arm" / "home_pose.json",
-                                  motion=self.folder / "arm" / "release_motion.json")
+                                  motion=self.folder / "arm" / "release_motion.json",
+                                  catch=self.folder / "arm" / "catch_pose.json")
 
     def keys(self, app, recording, commands, now, status="following", pose=POSE):
         return handle_staff_keys(app, recording, commands, pose, status, now, self.paths)
@@ -40,6 +42,21 @@ class StaffKeyTests(unittest.TestCase):
         busy = AppState(action="auto_release")
         self.assertEqual(self.keys(busy, RecordingState(), (SAVE_HOME_COMMAND,), 1.0)[0], busy)
         self.assertFalse(self.paths.home.exists())
+
+    def test_save_catch_writes_the_commanded_pose_only_while_following(self):
+        app, _ = self.keys(AppState(), RecordingState(), (SAVE_CATCH_COMMAND,), 1.0)
+        self.assertEqual((app.notice, app.notice_level), ("Catch pose saved", "info"))
+        self.assertEqual(load_pose(self.paths.catch), POSE)
+        self.assertFalse(self.paths.home.exists())  # the release pose (home) is untouched
+        refused = ((AppState(mode="fsc"), "following", "Cannot record: not in Manual Mode"),
+                   (AppState(), "syncing", "Cannot record: arm not following"),
+                   (AppState(action="auto_catch"), "auto catch", "Cannot record: arm not following"))
+        for state, status, notice in refused:
+            with self.subTest(notice=notice, status=status):
+                self.paths.catch.unlink(missing_ok=True)
+                after, _ = self.keys(state, RecordingState(), (SAVE_CATCH_COMMAND,), 2.0, status)
+                self.assertEqual((after.notice, after.notice_level), (notice, "warning"))
+                self.assertFalse(self.paths.catch.exists())
 
     def test_record_toggle_writes_a_valid_motion(self):
         app, recording = self.keys(AppState(), RecordingState(), (TOGGLE_RECORD_COMMAND,), 10.0)
@@ -103,6 +120,10 @@ class StaffKeyTests(unittest.TestCase):
         with self.assertLogs("robot.arm_store", level="ERROR"):
             app, _ = self.keys(AppState(), RecordingState(), (SAVE_HOME_COMMAND,), 1.0)
         self.assertEqual((app.notice, app.notice_level), ("Home pose not saved", "warning"))
+        self.paths = ArmDataPaths(home=blocker / "home.json", motion=blocker / "motion.json", catch=blocker / "c.json")
+        with self.assertLogs("robot.arm_store", level="ERROR"):
+            app, _ = self.keys(AppState(), RecordingState(), (SAVE_CATCH_COMMAND,), 1.0)
+        self.assertEqual((app.notice, app.notice_level), ("Catch pose not saved", "warning"))
         _, recording = self.keys(AppState(), RecordingState(), (TOGGLE_RECORD_COMMAND,), 1.0)
         _, recording = self.keys(AppState(), recording, (), 1.5)
         with self.assertLogs("robot.arm_store", level="ERROR"):
@@ -114,7 +135,8 @@ class LoadTests(unittest.TestCase):
     def setUp(self):
         self.folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
-        self.paths = ArmDataPaths(home=self.folder / "home.json", motion=self.folder / "motion.json")
+        self.paths = ArmDataPaths(home=self.folder / "home.json", motion=self.folder / "motion.json",
+                                  catch=self.folder / "catch.json")
 
     def test_missing_and_invalid_files_become_none(self):
         with self.assertLogs("robot.arm_store", level="WARNING"):
@@ -133,6 +155,21 @@ class LoadTests(unittest.TestCase):
         request = load_release_request(self.paths, "too_small")
         self.assertEqual((request.size, request.home), ("too_small", POSE))
         self.assertGreater(len(request.frames), 2)  # 1 s recorded, played at RELEASE_PLAYBACK_SPEED
+
+    def test_catch_request_loads_both_poses(self):
+        with self.assertLogs("robot.arm_store", level="WARNING"):
+            request = load_catch_request(self.paths, "ok")
+        self.assertEqual((request.size, request.catch, request.home), ("ok", None, None))
+        for command in (SAVE_HOME_COMMAND, SAVE_CATCH_COMMAND):
+            handle_staff_keys(AppState(), RecordingState(), (command,), POSE, "following", 1.0, self.paths)
+        self.assertEqual(load_catch_request(self.paths, "too_small"), type(request)("too_small", POSE, POSE))
+
+    def test_wants_catch_only_for_a_hi_that_can_start(self):
+        self.assertTrue(wants_catch(AppState(), ("hi",)))
+        for app, commands in ((AppState(), ("thx",)), (AppState(stopped=True), ("hi",)),
+                              (AppState(action="auto_release"), ("hi",)), (AppState(mode="fsc"), ("hi",))):
+            with self.subTest(app=app, commands=commands):
+                self.assertFalse(wants_catch(app, commands))
 
     def test_wants_release_only_for_a_thx_that_can_start(self):
         self.assertTrue(wants_release(AppState(), ("thx",)))

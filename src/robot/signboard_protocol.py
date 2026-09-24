@@ -15,6 +15,7 @@ from typing import Any, BinaryIO
 
 import numpy as np
 
+from robot.auto_catch import CATCH_PHASES
 from robot.config import SIGNBOARD_PROTOCOL_VERSION
 from robot.dino_controller_reader import ControllerState
 from robot.display_status import ARM_STATUSES, OVERLAY_KINDS, DisplayStatus, Overlay
@@ -28,7 +29,8 @@ CHANNELS = 3
 DRIVE_FIELDS = ("speed_index", "catch_requested", "input_lost", "pending_rotation_deg")
 CONTROLLER_FIELDS = ("up", "down", "left", "right", "button", "synchronized")
 STATUS_FIELDS = ("mode", "action", "voice_listening", "notice", "arm_status", "stopped", "notice_level",
-                 "recording_s", "progress")
+                 "recording_s", "progress", "phase")
+PHASES = ("", *CATCH_PHASES)  # "" = no Auto Catch running
 # Optional status numbers: None or a finite number within these bounds.
 OPTIONAL_BOUNDS = {"recording_s": (0.0, 24 * 3600.0), "progress": (0.0, 1.0)}
 OVERLAY_NUMBERS = ("cx", "cy", "w", "h", "angle")
@@ -180,6 +182,8 @@ def _status(fields: Any) -> DisplayStatus | None:
     if fields.get("mode") not in MODES or fields.get("action") not in ACTIONS:
         return None
     if fields.get("arm_status") not in ARM_STATUSES or fields.get("notice_level") not in NOTICE_LEVELS:
+        return None
+    if not isinstance(fields.get("phase"), str) or fields["phase"] not in PHASES:
         return None
     if any(key not in fields or not _optional(key, fields[key]) for key in OPTIONAL_BOUNDS):
         return None

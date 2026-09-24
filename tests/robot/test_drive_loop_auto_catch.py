@@ -1,9 +1,10 @@
-"""tests/robot/test_drive_loop_auto_catch.py: Loop wiring of Auto Catch alignment and captures.
+"""tests/robot/test_drive_loop_auto_catch.py: Loop wiring of the Auto Catch alignment and captures.
 
 Uses the fake devices in loop_fakes.py with the egg detector patched to return chosen
-detections, so the Hi! precondition alerts, the alignment driving the base (controller and
-leader ignored, input loss not stopping it), its done / lost results, Stop cancelling it, the
-capture command, and the alignment trace rows are verified without hardware or OpenCV. A fake
+detections and the recorded poses in a temporary directory, so the Hi! precondition alerts, the
+alignment driving the base (controller and leader ignored, input loss not stopping it), its done /
+lost results, Stop cancelling it, the capture command, and the alignment trace rows are verified
+without hardware or OpenCV. The phases after the alignment are in test_drive_loop_catch.py. A fake
 monotonic clock advances one loop period per frame, so the rate-limited ramp is predictable.
 Skipped when LeRobot is unavailable.
 """
@@ -20,7 +21,8 @@ try:
 except ImportError:  # pragma: no cover - depends on the environment
     DriveDevices = None
 
-from loop_fakes import DRIVING, FORWARD, FRONT_BGR, HOLD, NEAR, ZEROS, FakeAdapter, FakeLeader, FakeReader, FakeView
+from loop_fakes import DRIVING, FORWARD, FRONT_BGR, NEAR, ZEROS, FakeAdapter, FakeLeader, FakeReader, FakeView
+from loop_fakes import temp_arm_paths
 from robot.config import (
     ALIGN_DONE_FRAMES,
     ALIGN_LOST_FRAMES,
@@ -57,7 +59,7 @@ class AutoCatchLoopTests(unittest.TestCase):
         self.view = FakeView(keep_running=True)
         self.reader = FakeReader(FORWARD)
         self.parts = DriveDevices(reader=self.reader, adapter=FakeAdapter(), camera=None, view=self.view,
-                                  use_rerun=False, leader=self.leader)
+                                  use_rerun=False, leader=self.leader, arm_paths=temp_arm_paths(self))
 
     def tick(self):
         self.clock += 1 / LOOP_HZ
@@ -94,10 +96,10 @@ class AutoCatchLoopTests(unittest.TestCase):
         self.assertLess(sent["y.vel"], 0.0)  # egg right of target -> move right
         self.assertGreater(sent["x.vel"], 0.0)  # egg smaller than target -> forward
         self.assertAlmostEqual(sent["x.vel"], ALIGN_MAX_ACCEL / LOOP_HZ)  # ramping up, not the joystick
-        self.assertEqual((state.arm_status, self.parts.adapter.arms[-1]), ("holding", NEAR))  # last pose held
+        self.assertEqual((state.arm_status, self.parts.adapter.arms[-1]), ("auto catch", NEAR))  # last pose held
         status = self.view.rendered[-1][2]
-        self.assertEqual((status.action, [overlay.kind for overlay in status.overlays]),
-                         ("auto_catch", ["target", "egg_ok"]))
+        self.assertEqual((status.action, status.phase, [overlay.kind for overlay in status.overlays]),
+                         ("auto_catch", "align", ["target", "egg_ok"]))
         self.assertEqual(status.overlays[1].label, "green egg")
 
     def test_controller_input_loss_does_not_stop_alignment(self):
@@ -107,19 +109,17 @@ class AutoCatchLoopTests(unittest.TestCase):
         self.assertEqual(state.app.action, "auto_catch")
         self.assertLess(self.parts.adapter.sent[-1]["y.vel"], 0.0)
 
-    def test_done_returns_to_manual_mode_with_zeros_and_slow_arm_resync(self):
+    def test_done_moves_on_to_the_catch_pose_with_zeros(self):
         state = self.start_aligning()
         self.detector.return_value = (ON_TARGET,)
-        self.leader.pose = {key: 90.0 for key in HOLD}  # moved during the alignment
+        reads = self.leader.reads
         for _ in range(ALIGN_DONE_FRAMES + 10):  # smoothing converges first, then N frames in tolerance
             state = self.run_frame(state)
-            if state.app.action == "none":
+            if state.app.catch.phase != "align":
                 break
-        self.assertEqual((state.app.action, state.app.notice), ("none", "Aligned. Catch: not available yet"))
+        self.assertEqual((state.app.action, state.app.catch.phase), ("auto_catch", "to_catch"))
         self.assertEqual(self.parts.adapter.sent[-1], ZEROS)
-        self.assertEqual((state.follow.engaged, state.arm_status), (False, "syncing"))  # slow approach
-        state = self.run_frame(state)
-        self.assertAlmostEqual(self.parts.adapter.sent[-1]["x.vel"], 0.1)  # driving again
+        self.assertEqual((self.leader.reads, state.arm_status, state.align_trace), (reads, "auto catch", None))
 
     def test_egg_lost(self):
         state = self.start_aligning()

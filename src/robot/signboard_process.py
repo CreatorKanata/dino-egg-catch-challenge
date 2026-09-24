@@ -2,8 +2,8 @@
 
 Reads display packets from stdin and draws them with SignboardView; KachiButton text typed
 into the window is matched by kachi_phrases and each command is written to stdout as one JSON
-line, as are "capture", "save_home", and "toggle_record" for the staff keys (`c`, `b`, `r`; see
-config.py). It runs in its own interpreter
+line, as are "capture", "save_home", "toggle_record", and "save_catch" for the staff keys (`c`,
+`b`, `r`, `k`; see config.py). It runs in its own interpreter
 because opencv (pulled in by LeRobot) and pygame each bundle libSDL2, and both copies cannot
 safely live in one macOS process. Therefore this module must NEVER import lerobot or cv2
 (directly or through robot.drive_loop, robot.top_camera, robot.lekiwi_adapter, robot.leader_arm,
@@ -23,6 +23,7 @@ from typing import BinaryIO
 
 from robot.config import (
     CAPTURE_COMMAND,
+    SAVE_CATCH_COMMAND,
     SAVE_HOME_COMMAND,
     SIGNBOARD_CHILD_POLL_S,
     SIGNBOARD_FULLSCREEN,
@@ -87,7 +88,7 @@ def serve(
             phrases, commands = feed(phrases, result.typed, clock())
             emit_commands(stdout, commands)
         keys = ((result.capture, CAPTURE_COMMAND), (result.save_home, SAVE_HOME_COMMAND),
-                (result.toggle_record, TOGGLE_RECORD_COMMAND))
+                (result.toggle_record, TOGGLE_RECORD_COMMAND), (result.save_catch, SAVE_CATCH_COMMAND))
         emit_commands(stdout, tuple(command for pressed, command in keys if pressed))
         if not result.keep_running:
             logger.info("Signboard closed by ESC or window close")

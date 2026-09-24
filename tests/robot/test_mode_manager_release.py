@@ -11,7 +11,7 @@ import unittest
 
 from robot.auto_release import GRIPPER_KEY, ReleaseRequest, ReleaseState, start_release
 from robot.config import ARM_KEYS, NOTICE_SECONDS
-from robot.manual_mode import CommandResult, fold_commands, release_arm_status, step_auto_release
+from robot.manual_mode import CommandResult, fold_commands, auto_arm_status, step_auto_release
 from robot.mode_manager import AppState, apply_command, manual_control_allowed, release_notice, start_auto_release
 from robot.vision.basket_size import BasketDetection
 
@@ -88,8 +88,8 @@ class RunningTests(unittest.TestCase):
         self.assertEqual(result.app.action, "auto_release")
         self.assertGreater(base["y.vel"], 0.0)  # basket left of the target -> move left
         self.assertEqual(arm, HOME)
-        self.assertEqual(release_arm_status(result.app), "auto release")
-        self.assertEqual(release_arm_status(AppState()), "holding")
+        self.assertEqual(auto_arm_status(result.app), "auto release")
+        self.assertEqual(auto_arm_status(AppState()), "holding")
         idle = CommandResult(AppState(), False, False)
         self.assertEqual(step_auto_release(idle, BASKET, HOME, 0.1), (idle, None, None))
 

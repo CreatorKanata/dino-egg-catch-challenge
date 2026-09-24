@@ -1,11 +1,11 @@
 """src/robot/manual_mode.py: Per-frame Manual Mode decisions for the control loop.
 
 Folds KachiButton commands through the mode manager (`Hi!` in Manual Mode with the latest egg
-size class, `Thx` with the basket size class and the recorded data), advances a running Auto Catch
-alignment or Auto Release, then decides the base action (the action's command while it runs, else
-controller driving only in Manual Mode, never in a stop frame or while the Stop latch holds) and
-the arm pose (Auto Release's pose while it runs; else slow engagement, then leader following;
-held in FSC, while stopped, during the alignment, and on leader faults). Split out of
+size class and the recorded poses, `Thx` with the basket size class and the recorded data),
+advances a running Auto Catch or Auto Release, then decides the base action (the action's command
+while it runs, else controller driving only in Manual Mode, never in a stop frame or while the Stop
+latch holds) and the arm pose (the action's pose while it runs; else slow engagement, then leader
+following; held in FSC, while stopped, and on leader faults). Split out of
 drive_loop.py to keep files small. Stdlib-only: no hardware is touched here, so every rule is
 unit-tested.
 """
@@ -14,9 +14,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 import logging
 
-from robot.align import TraceRow, align_step, trace_row
+from robot.align import TraceRow, trace_row
 from robot.arm_follow import ArmFollowState, disengaged, follow_step
 from robot.arm_store import RecordingState
+from robot.auto_catch import DEFAULT_CATCH_LIMITS, CatchLimits, CatchRequest, catch_step
 from robot.auto_release import ReleaseRequest, release_step
 from robot.config import LEFT_RIGHT_ROLE, SPEED_LEVELS
 from robot.controller_to_action import stop_action
@@ -27,15 +28,15 @@ from robot.mode_manager import (
     AppState,
     Transition,
     apply_command,
+    catch_notice,
     expire_notice,
-    finish_auto_catch,
     manual_control_allowed,
     release_notice,
     start_auto_catch,
     start_auto_release,
 )
 from robot.vision.basket_size import BasketDetection
-from robot.vision.egg_size import EggDetection, SizeClass
+from robot.vision.egg_size import EggDetection, WristView
 from robot.vision.timing import DetectTiming
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ class LoopState:
     align_trace: str | None = None  # CSV trace path of the running alignment
     basket: BasketDetection | None = None  # pink basket in the latest front frame (Manual Mode only)
     recording: RecordingState = RecordingState()  # release motion recording (staff key)
+    wrist: WristView | None = None  # wrist-view check of the latest frame (only during Auto Catch's check)
 
 
 @dataclass(frozen=True)
@@ -65,9 +67,9 @@ class CommandResult:
     disengage_arm: bool
 
 
-def _apply(app: AppState, command: str, now: float, egg_size: SizeClass, release: ReleaseRequest) -> Transition:
+def _apply(app: AppState, command: str, now: float, catch: CatchRequest, release: ReleaseRequest) -> Transition:
     if command == "hi" and app.mode == "manual":
-        return start_auto_catch(app, egg_size, now)
+        return start_auto_catch(app, catch, now)
     if command == "thx" and app.mode == "manual":
         return start_auto_release(app, release, now)
     return apply_command(app, command, now)
@@ -77,19 +79,19 @@ def fold_commands(
     app: AppState,
     commands: Iterable[str],
     now: float,
-    egg_size: SizeClass = "none",
+    catch: CatchRequest = CatchRequest(),
     release: ReleaseRequest = ReleaseRequest(),
 ) -> CommandResult:
     """Apply commands in arrival order, then expire the notice; stop flags are OR-ed.
 
-    `hi` in Manual Mode goes to start_auto_catch with `egg_size` (the latest front frame's size
-    class), `thx` in Manual Mode to start_auto_release with `release` (basket size class and the
-    loaded data); every other command goes to apply_command. Unknown commands ("capture",
-    "save_home", "toggle_record") are no-ops here.
+    `hi` in Manual Mode goes to start_auto_catch with `catch` (the latest front frame's size class
+    and the loaded poses), `thx` in Manual Mode to start_auto_release with `release` (basket size
+    class and the loaded data); every other command goes to apply_command. Unknown commands
+    ("capture", "save_home", "save_catch", "toggle_record") are no-ops here.
     """
     stop_base = disengage_arm = False
     for command in commands:
-        transition = _apply(app, command, now, egg_size, release)
+        transition = _apply(app, command, now, catch, release)
         app = transition.state
         stop_base = stop_base or transition.stop_base
         disengage_arm = disengage_arm or transition.disengage_arm
@@ -97,24 +99,24 @@ def fold_commands(
 
 
 def step_auto_catch(
-    result: CommandResult, egg: EggDetection | None, now: float
-) -> tuple[CommandResult, dict[str, float] | None, TraceRow | None]:
-    """Advance a running alignment on this frame's egg; (result, None, None) when no action runs.
+    result: CommandResult, egg: EggDetection | None, wrist: WristView | None, commanded: Mapping[str, float],
+    now: float, limits: CatchLimits = DEFAULT_CATCH_LIMITS,
+) -> tuple[CommandResult, dict[str, float] | None, dict[str, float] | None, TraceRow | None]:
+    """Advance a running Auto Catch on this frame's egg, wrist check, and last commanded arm pose.
 
-    The returned base action replaces controller driving; the trace row describes the frame. A
-    terminal alignment result ends the action (finish_auto_catch): zero velocities this frame and
-    arm following disengaged.
+    Returns (result, base action, arm pose, alignment trace row), or (result, None, None, None) when
+    it is not running. Base and arm replace controller driving and leader following for this frame;
+    the trace row exists only for alignment frames. A terminal outcome ends the action
+    (catch_notice): zero velocities this frame and arm following disengaged.
     """
     app = result.app
     if app.action != "auto_catch":
-        return result, None, None
-    align, base, outcome = align_step(app.align, egg, now)
-    row = trace_row(app.align, egg, now, base, outcome)
-    if outcome == "running":
-        return replace(result, app=replace(app, align=align)), base, row
-    finished = finish_auto_catch(app, outcome, now)
-    return CommandResult(app=finished.state, stop_base=result.stop_base or finished.stop_base,
-                         disengage_arm=True), base, row
+        return result, None, None, None
+    step = catch_step(app.catch, egg, wrist, commanded, now, limits)
+    row = None if step.align_result is None else trace_row(app.catch.align, egg, now, step.base, step.align_result)
+    transition = catch_notice(replace(app, catch=step.state), step.outcome, now)
+    return CommandResult(app=transition.state, stop_base=result.stop_base or transition.stop_base,
+                         disengage_arm=result.disengage_arm or transition.disengage_arm), step.base, step.arm, row
 
 
 def step_auto_release(
@@ -135,8 +137,10 @@ def step_auto_release(
                          disengage_arm=result.disengage_arm or transition.disengage_arm), step.base, step.arm
 
 
-def release_arm_status(app: AppState) -> ArmStatus:
-    """Arm status for a frame whose pose came from Auto Release (holding on its last frame)."""
+def auto_arm_status(app: AppState) -> ArmStatus:
+    """Arm status for a frame whose pose came from an automatic action (holding on its last frame)."""
+    if app.action == "auto_catch":
+        return "auto catch"
     return "auto release" if app.action == "auto_release" else "holding"
 
 

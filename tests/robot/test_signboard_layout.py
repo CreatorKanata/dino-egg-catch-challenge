@@ -153,6 +153,13 @@ class StatusTextTests(unittest.TestCase):
         self.assertEqual(status_lines(DRIVING, SYNCED, 3, status=DisplayStatus(mode="fsc"))[0], "FSC (demo)")
         busy = DisplayStatus(action="auto_catch")
         self.assertEqual(status_lines(DRIVING, SYNCED, 3, status=busy)[0], "MANUAL - AUTO CATCH")
+        for phase, text in (("align", "aligning"), ("to_catch", "to catch pose"), ("wrist_check", "checking"),
+                            ("pick_stub", "checking"), ("to_release", "to release pose")):
+            with self.subTest(phase=phase):
+                line = status_lines(DRIVING, SYNCED, 3, status=replace(busy, phase=phase))[0]
+                self.assertEqual(line, f"MANUAL - AUTO CATCH: {text}")
+        arm = status_lines(DRIVING, SYNCED, 3, status=DisplayStatus(action="auto_catch", arm_status="auto catch"))[2]
+        self.assertTrue(arm.startswith("arm auto catch  |  "), arm)
 
     def test_drive_line_and_notice(self):
         lost = replace(DRIVING, input_lost=True, catch_requested=True)

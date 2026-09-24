@@ -1,12 +1,13 @@
 """src/robot/drive_loop.py: One Manual Mode control-loop iteration and the fixed-rate loop.
 
 Polls the controller and the KachiButton commands, reads the leader arm, decides the base
-action and arm pose (manual_mode.py, including a running Auto Catch alignment or Auto Release),
-sends them, applies the staff keys (save home pose, record the release motion; arm_store.py),
-then observes: the Pi frames are converted to BGR, the 16:9 overhead frame is downscaled once,
-the egg and basket detectors run on the front frame in Manual Mode (their results drive the next
-frame's `Hi!` / `Thx` checks and alignments), a `capture` command saves the frames (without
-overlays), and the operator (Rerun) and attendee (signboard) views are updated.
+action and arm pose (manual_mode.py, including a running Auto Catch or Auto Release), sends them,
+applies the staff keys (save home or catch pose, record the release motion; arm_store.py), then
+observes: the Pi frames are converted to BGR, the 16:9 overhead frame is downscaled once, the egg
+and basket detectors run on the front frame in Manual Mode (their results drive the next frame's
+`Hi!` / `Thx` checks and alignments), the wrist-view check runs only during Auto Catch's
+wrist_check frames (when enabled), a `capture` command saves the frames (without overlays), and
+the operator (Rerun) and attendee (signboard) views are updated.
 Extracted from teleop_drive.py so the entry point only handles setup and shutdown. The loop
 ends when the display reports ESC, window close, or a dead signboard process; `Stop` does not
 end it. This module must not import pygame (robot.signboard); cv2 is only loaded lazily (by the
@@ -29,6 +30,7 @@ from robot.config import (
     SIGNBOARD_SIDE_CAMERAS,
     SPEED_LEVELS,
     TOP_CAMERA_KEY,
+    WRIST_CAMERA_KEY,
 )
 from robot.dino_controller_reader import ControllerState, SerialControllerReader
 from robot.arm_follow import ArmFollowState, disengaged
@@ -36,10 +38,13 @@ from robot.arm_store import (
     DEFAULT_PATHS,
     ArmDataPaths,
     handle_staff_keys,
+    load_catch_request,
     load_release_request,
     recording_seconds,
+    wants_catch,
     wants_release,
 )
+from robot.auto_catch import DEFAULT_CATCH_LIMITS, CatchLimits, CatchRequest
 from robot.auto_release import ReleaseRequest
 from robot.display_status import DisplayStatus, display_status, front_overlays
 from robot.drive_state import DriveState, update_drive_state
@@ -49,12 +54,12 @@ from robot.align import TraceRow
 from robot.display_status import ArmStatus
 from robot.manual_mode import (
     LoopState,
+    auto_arm_status,
     fold_commands,
     leader_wanted,
     log_changes,
     plan_arm,
     plan_base,
-    release_arm_status,
     step_auto_catch,
     step_auto_release,
 )
@@ -64,10 +69,11 @@ from robot.vision.basket_size import classify_basket
 from robot.vision.align_trace import append_row, trace_path
 from robot.vision.capture import save_capture
 from robot.vision.egg_detector import detect_eggs
-from robot.vision.egg_size import EggDetection, classify_size
+from robot.vision.egg_size import EggDetection, WristView, classify_size
 from robot.vision.frames import normalize_observation_frames
 from robot.vision.top_frame import downscale_to_width
 from robot.vision.timing import record_detect_time
+from robot.vision.wrist_check import egg_in_wrist_view
 
 if TYPE_CHECKING:  # top_camera loads cv2 through LeRobot; not needed at runtime here
     from robot.top_camera import TopCamera
@@ -99,7 +105,8 @@ class DriveDevices:
     view: DisplaySink | None
     use_rerun: bool
     leader: LeaderArm | None = None
-    arm_paths: ArmDataPaths = DEFAULT_PATHS  # home pose and release motion files
+    arm_paths: ArmDataPaths = DEFAULT_PATHS  # home pose, release motion, and catch pose files
+    catch_limits: CatchLimits = DEFAULT_CATCH_LIMITS  # Auto Catch arm speed, timeouts, wrist check
 
 
 def log_transitions(before: DriveState, after: DriveState) -> None:
@@ -133,11 +140,11 @@ def camera_frames(observation: dict[str, Any], top_frame: Any | None) -> dict[st
 
 
 def _plan_arm(
-    devices: DriveDevices, app: AppState, follow: ArmFollowState, release_arm: dict[str, float] | None, dt: float
+    devices: DriveDevices, app: AppState, follow: ArmFollowState, auto_arm: dict[str, float] | None, dt: float
 ) -> tuple[dict[str, float], ArmFollowState, ArmStatus]:
-    """Auto Release's pose when it produced one (the leader is not read); else plan_arm."""
-    if release_arm is not None:
-        return release_arm, disengaged(), release_arm_status(app)
+    """The automatic action's pose when it produced one (the leader is not read); else plan_arm."""
+    if auto_arm is not None:
+        return auto_arm, disengaged(), auto_arm_status(app)
     has_leader = devices.leader is not None
     leader_pose = devices.leader.read_pose() if leader_wanted(app, has_leader) else None
     return plan_arm(devices.adapter.arm_hold, leader_pose, follow, app, has_leader, dt)
@@ -149,27 +156,33 @@ def _next_state(
     """Steps 1-6 of a frame: inputs and commands, Auto Catch / Auto Release, stops, leader, base,
     send, then the staff keys (they record the pose just sent).
 
-    Returns the sent action and this frame's commands as well. The egg and basket used here are the
-    ones detected in the previous frame's front image (the newest available).
+    Returns the sent action and this frame's commands as well. The egg, basket, and wrist check used
+    here are the ones from the previous frame's images (the newest available).
     """
     controller, encoder_delta = devices.reader.poll(now)
     stale = devices.reader.is_stale(now)
     commands = devices.view.poll_commands() if devices.view is not None else ()
     release = (load_release_request(devices.arm_paths, classify_basket(state.basket))
                if wants_release(state.app, commands) else ReleaseRequest())
-    folded = fold_commands(state.app, commands, now, classify_size(state.egg), release)
-    folded, auto_base, trace = step_auto_catch(folded, state.egg, now)
-    folded, release_base, release_arm = step_auto_release(folded, state.basket, devices.adapter.arm_hold, now)
+    catch = (load_catch_request(devices.arm_paths, classify_size(state.egg))
+             if wants_catch(state.app, commands) else CatchRequest())
+    folded = fold_commands(state.app, commands, now, catch, release)
+    arm_hold = devices.adapter.arm_hold
+    folded, catch_base, catch_arm, trace = step_auto_catch(folded, state.egg, state.wrist, arm_hold, now,
+                                                           devices.catch_limits)
+    folded, release_base, release_arm = step_auto_release(folded, state.basket, arm_hold, now)
     follow = disengaged() if folded.disengage_arm else state.follow
     drive = update_drive_state(state.drive, controller, encoder_delta, stale, dt)
-    arm_cmd, follow, arm_status = _plan_arm(devices, folded.app, follow, release_arm, dt)
+    auto_arm = catch_arm if catch_arm is not None else release_arm
+    arm_cmd, follow, arm_status = _plan_arm(devices, folded.app, follow, auto_arm, dt)
     drive, base = plan_base(drive, controller, folded.app, folded.stop_base,
-                            auto_base if release_base is None else release_base)
+                            catch_base if catch_base is not None else release_base)
     devices.adapter.send_action(base, arm_cmd)
     app, recording = handle_staff_keys(folded.app, state.recording, commands, arm_cmd, arm_status, now,
                                        devices.arm_paths)
+    aligning = folded.app.action == "auto_catch" and folded.app.catch.phase == "align"
     next_state = replace(state, drive=drive, app=app, follow=follow, arm_status=arm_status, recording=recording,
-                         align_trace=record_trace(state.align_trace, trace, folded.app.action == "auto_catch"))
+                         align_trace=record_trace(state.align_trace, trace, aligning))
     log_transitions(state.drive, drive)
     log_changes(state, next_state)
     return next_state, controller, {**arm_cmd, **base}, tuple(commands)
@@ -209,6 +222,14 @@ def detect_front(state: LoopState, frames: Mapping[str, Any]) -> tuple[LoopState
     return replace(state, egg=detections[0] if detections else None, basket=basket, timing=timing), detections
 
 
+def detect_wrist(state: LoopState, frames: Mapping[str, Any], limits: CatchLimits) -> WristView | None:
+    """Run the wrist-view check only during Auto Catch's wrist_check frames and only when enabled."""
+    wrist = frames.get(WRIST_CAMERA_KEY)
+    if not limits.wrist_check_enabled or wrist is None or state.app.catch.phase != "wrist_check":
+        return None
+    return egg_in_wrist_view(wrist)
+
+
 def capture(state: LoopState, frames: Mapping[str, Any], detections: tuple[EggDetection, ...], now: float) -> LoopState:
     """Save the raw frames and detections; a failed write is logged and shown, never raised."""
     try:
@@ -233,6 +254,7 @@ def step(devices: DriveDevices, state: LoopState, previous_time: float | None) -
     top_frame = downscale_to_width(top_raw)  # 960x540 for the signboard, Rerun, and captures
     frames = camera_frames(observation, top_frame)
     next_state, detections = detect_front(next_state, frames)
+    next_state = replace(next_state, wrist=detect_wrist(next_state, frames, devices.catch_limits))
     if CAPTURE_COMMAND in commands:
         next_state = capture(next_state, frames, detections, now)
     if devices.use_rerun:

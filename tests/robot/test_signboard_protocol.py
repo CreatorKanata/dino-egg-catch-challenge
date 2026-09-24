@@ -59,7 +59,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(fields["status"], {"mode": "fsc", "action": "none", "voice_listening": True,
                                             "notice": "Listening...", "arm_status": "leader fault",
                                             "stopped": False, "notice_level": "info", "recording_s": None,
-                                            "progress": None, "overlays": []})
+                                            "progress": None, "phase": "", "overlays": []})
         self.assertEqual(fields["frames"], [{"name": "top", "w": 4, "h": 3}, {"name": "front", "w": 0, "h": 0}])
         self.assertEqual(body, FRAME.tobytes())
 
@@ -148,6 +148,17 @@ class ProtocolTests(unittest.TestCase):
         status = replace(STATUS, action="auto_release", arm_status="auto release", recording_s=4.2, progress=0.5,
                          overlays=rects)
         self.assertEqual(read_packet(io.BytesIO(encode(DisplayPacket(DRIVE, CONTROLLER, (), status)))).status, status)
+
+    def test_catch_phase_round_trips_and_unknown_phases_are_rejected(self):
+        status = replace(STATUS, action="auto_catch", arm_status="auto catch", phase="wrist_check")
+        self.assertEqual(read_packet(io.BytesIO(encode(DisplayPacket(DRIVE, CONTROLLER, (), status)))).status, status)
+        good = json.loads(encode(packet(())).partition(b"\n")[0])
+        for phase in ("dance", 3, None):
+            with self.subTest(phase=phase):
+                line = json.dumps({**good, "status": {**good["status"], "phase": phase}}).encode() + b"\n"
+                self.assertIsNone(read_packet(io.BytesIO(line)))
+        missing = {key: value for key, value in good["status"].items() if key != "phase"}
+        self.assertIsNone(read_packet(io.BytesIO(json.dumps({**good, "status": missing}).encode() + b"\n")))
 
     def test_malformed_optional_numbers_return_none(self):
         good = json.loads(encode(packet(())).partition(b"\n")[0])

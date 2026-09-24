@@ -2,7 +2,7 @@
 
 Computes where the three camera views and the status bar go, where a normalized overlay lands
 inside a letterboxed camera view, and what the status bar says (mode or STOPPED, with the Auto
-Release playback progress; the resume hint, a notice, the release recording time, the FSC voice
+Catch phase or the Auto Release playback progress; the resume hint, a notice, the release recording time, the FSC voice
 hint, or the drive status; arm status with speed and directions),
 using only the stdlib (own Rect, not pygame.Rect) so it is unit-tested without a display.
 signboard.py draws.
@@ -25,7 +25,11 @@ ARM_TEXT = {
     "leader fault": "LEADER ARM FAULT",
     "no leader": "no leader arm",
     "auto release": "arm auto release",
+    "auto catch": "arm auto catch",
 }
+# Auto Catch phase on the mode line ("MANUAL - AUTO CATCH: to catch pose"); the stub is instantaneous.
+PHASE_TEXT = {"align": "aligning", "to_catch": "to catch pose", "wrist_check": "checking", "pick_stub": "checking",
+              "to_release": "to release pose"}
 SEPARATOR = "  |  "
 VOICE_TEXT = "mic on"
 STOPPED_TEXT = "STOPPED"
@@ -136,6 +140,8 @@ def _mode_text(status: DisplayStatus) -> str:
     if status.stopped:
         return STOPPED_TEXT
     action = ACTION_TEXT[status.action]
+    if status.phase in PHASE_TEXT:
+        action = f"{action}: {PHASE_TEXT[status.phase]}"
     if status.progress is not None:
         action = f"{action} {round(100 * status.progress)}%"
     return f"{MODE_TEXT[status.mode]} - {action}" if action else MODE_TEXT[status.mode]

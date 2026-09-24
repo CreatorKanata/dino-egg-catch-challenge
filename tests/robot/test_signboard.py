@@ -2,7 +2,7 @@
 
 Uses SDL's dummy video driver so rendering and event handling run without a display. The
 tests check that drawing (including the overlays) does not raise, that ESC ends the view, that
-typed text (KachiButton) and the staff keys (capture, save home, record) are returned by pump(),
+typed text (KachiButton) and the staff keys (capture, save home, save catch, record) are returned by pump(),
 and that serve() turns them into command lines; pixels are asserted only for the egg and basket
 outline colors.
 """
@@ -88,6 +88,8 @@ class SignboardViewTests(unittest.TestCase):
         from robot.signboard import PumpResult
 
         self.assertEqual(self.view.pump(), PumpResult(True, "", save_home=True, toggle_record=True))
+        pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_k))
+        self.assertEqual(self.view.pump(), PumpResult(True, "", save_catch=True))
 
     def test_target_label_below_and_egg_label_above(self):
         frame = np.zeros((48, 64, 3), dtype=np.uint8)
@@ -138,6 +140,7 @@ class SignboardViewTests(unittest.TestCase):
         pygame.event.post(pygame.event.Event(pygame.TEXTINPUT, text="Hi!"))
         pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_c))
         pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_r))
+        pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_k))
         pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
         read_end, write_end = os.pipe()  # select() needs a real descriptor; nothing is ever written
         self.addCleanup(os.close, read_end)
@@ -149,7 +152,8 @@ class SignboardViewTests(unittest.TestCase):
                          b'{"v": 1, "type": "command", "command": "stop"}\n'
                          b'{"v": 1, "type": "command", "command": "hi"}\n'
                          b'{"v": 1, "type": "command", "command": "capture"}\n'
-                         b'{"v": 1, "type": "command", "command": "toggle_record"}\n')
+                         b'{"v": 1, "type": "command", "command": "toggle_record"}\n'
+                         b'{"v": 1, "type": "command", "command": "save_catch"}\n')
 
     @staticmethod
     def _pump_result(keep_running, typed, capture=False):
