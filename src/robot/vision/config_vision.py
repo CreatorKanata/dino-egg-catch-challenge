@@ -157,6 +157,21 @@ if any(ALIGN_MAX_XY * min(1.0, tol / full) < ALIGN_MIN_XY - 1e-9 for tol, full i
 # them) and `python -m robot.vision.inspect captures/<stamp>-wrist.png --wrist` confirms detections.
 WRIST_CHECK_ENABLED: Final = False
 WRIST_CHECK_FRAMES: Final = 10  # frames held at the catch pose; an egg in any of them passes the check
-WRIST_MIN_SPOT_CLUSTER: Final = 2  # partial egg: at least this many ringed spots of one color in a cluster
-if not (WRIST_CHECK_FRAMES >= 1 and WRIST_MIN_SPOT_CLUSTER >= 1):
-    raise ValueError("WRIST_CHECK_FRAMES and WRIST_MIN_SPOT_CLUSTER must be >= 1")
+# Close-up mode (captures 20260925-014442/-014418/-014506): the egg fills the view and is cut by the
+# border, so no egg-shape rules apply. The egg is present when at least WRIST_MIN_SPOTS spots
+# (EdgeDrawing ellipse or HSV blob, minor axis >= WRIST_MIN_SPOT_PX, mostly one egg color inside)
+# have egg white on at least WRIST_RING_WHITE_FRACTION of the in-frame part of their ring, and at
+# least WRIST_RING_MIN_INSIDE of the ring is inside the frame. The white gripper parts have no spots;
+# the pink basket edge has no white ring.
+WRIST_MIN_SPOTS: Final = 1
+WRIST_MIN_SPOT_PX: Final = 40
+WRIST_RING_WHITE_FRACTION: Final = 0.5
+WRIST_RING_MIN_INSIDE: Final = 0.25
+# Spots are disks (axis ratio 1.1-1.3 on the near capture) filled with one color (share 0.96-1.00);
+# the teal gripper part (ratio 1.7) and the pink basket edge (ratio 2.4, red share ~0.5) fail these.
+WRIST_MAX_SPOT_ASPECT: Final = 1.5
+WRIST_SPOT_MIN_FILL: Final = 0.7
+if not (WRIST_CHECK_FRAMES >= 1 and WRIST_MIN_SPOTS >= 1 and WRIST_MIN_SPOT_PX > 0):
+    raise ValueError("WRIST_CHECK_FRAMES and WRIST_MIN_SPOTS must be >= 1 and WRIST_MIN_SPOT_PX positive")
+if not (0 < WRIST_RING_WHITE_FRACTION <= 1 and 0 < WRIST_RING_MIN_INSIDE <= 1):
+    raise ValueError("WRIST_RING_WHITE_FRACTION and WRIST_RING_MIN_INSIDE must be in (0, 1]")

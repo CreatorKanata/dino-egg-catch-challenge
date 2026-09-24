@@ -27,7 +27,7 @@ from robot.vision.config_vision import RELEASE_TARGET_CX, RELEASE_TARGET_CY, REL
 from robot.vision.egg_detector import Candidate, detect_eggs, inspect_candidates
 from robot.vision.egg_size import EggDetection, classify_size
 from robot.vision.frames import rgb_to_bgr
-from robot.vision.wrist_check import egg_in_wrist_view
+from robot.vision.wrist_check import egg_in_wrist_view, wrist_spots
 
 OK_BGR = (90, 200, 90)
 OUT_BGR = (40, 120, 220)
@@ -51,14 +51,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def describe_wrist(frame: Any) -> str:
-    """One line for the wrist-view check: the egg (full or partial) or none, with the time."""
+    """The wrist-view check: one line per disk-like spot candidate (bbox, color, ring measures,
+    verdict), then the result (egg full or partial, or none) with the time."""
     started = time.perf_counter()
     view = egg_in_wrist_view(frame)
     elapsed_ms = 1000.0 * (time.perf_counter() - started)
+    lines = []
+    for spot in wrist_spots(frame):
+        half_w, half_h = spot.axis_a / 2, spot.axis_b / 2
+        box = (round(spot.cx - half_w), round(spot.cy - half_h), round(spot.axis_a), round(spot.axis_b))
+        lines.append(f"  spot ({spot.source}) box~{box} {spot.color} fill={spot.color_share:.2f} "
+                     f"ring inside={spot.ring_inside:.2f} white={spot.ring_white:.2f}"
+                     f"{' border' if spot.touches_border else ''}  {'ACCEPTED' if spot.accepted else 'rejected'}")
+    head = "\n".join(lines + [""]) if lines else ""
     if view is None:
-        return f"wrist: no egg  ({elapsed_ms:.1f} ms)"
+        return f"{head}wrist: no egg  ({elapsed_ms:.1f} ms)"
     kind = "partial" if view.partial else "full"
-    return f"wrist: {view.color} egg ({kind})  cx={view.cx:.3f} cy={view.cy:.3f}  ({elapsed_ms:.1f} ms)"
+    return f"{head}wrist: {view.color} egg ({kind})  cx={view.cx:.3f} cy={view.cy:.3f}  ({elapsed_ms:.1f} ms)"
 
 
 def output_path(image: Path) -> Path:
