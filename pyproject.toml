@@ -1,13 +1,21 @@
 # pyproject.toml: Repository-root Python project for the attendee-facing application.
 # Declares the LeRobot fork (LeKiwi client + Rerun viewer) and pyserial for the
 # dino-controller so `uv` can build one environment; the app is not packaged.
+# The egg detector's optional "edge" spot stage needs OpenCV contrib (cv2.ximgproc). LeRobot pulls
+# opencv-python-headless, which provides the same `cv2` module: the contrib package must replace it
+# in the same environment (uninstall opencv-python-headless, keep only the contrib wheel).
 
 [project]
 name = "dino-egg-catch-challenge"
 version = "0.1.0"
 description = "Dino Egg Catch Challenge application: Drive Mode teleoperation for LeKiwi."
 requires-python = ">=3.12"
-dependencies = ["lerobot[lekiwi,viz]", "pyserial>=3.5", "pygame-ce>=2.5"]
+dependencies = [
+    "lerobot[lekiwi,viz]",
+    "pyserial>=3.5",
+    "pygame-ce>=2.5",
+    "opencv-contrib-python-headless==4.13.0.92",
+]
 
 [tool.uv]
 package = false

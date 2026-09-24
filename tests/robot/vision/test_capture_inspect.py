@@ -27,10 +27,11 @@ STAMP_TIME = time.strptime("2026-09-24 12:34:56", "%Y-%m-%d %H:%M:%S")
 
 
 def egg_image():
+    """An egg with the measured proportions (spot diameter ~1/4 of the egg height)."""
     frame = np.full((480, 640, 3), (40, 70, 110), dtype=np.uint8)
-    cv2.ellipse(frame, (320, 250), (110, 140), 0, 0, 360, (245, 245, 245), -1)
-    for center in ((270, 230), (380, 200), (320, 330)):
-        cv2.circle(frame, center, 18, (40, 160, 60), -1)
+    cv2.ellipse(frame, (320, 250), (130, 100), 0, 0, 360, (245, 245, 245), -1)
+    for center in ((250, 255), (390, 240), (320, 190), (320, 305), (325, 250)):
+        cv2.circle(frame, center, 25, (40, 160, 60), -1)
     return frame
 
 
@@ -82,15 +83,14 @@ class InspectToolTests(unittest.TestCase):
 
     def test_debug_lists_candidates_with_verdicts(self):
         image = self.folder / "front.png"
-        frame = egg_image()
-        cv2.rectangle(frame, (20, 20), (300, 40), (245, 245, 245), -1)
-        cv2.imwrite(str(image), frame)
+        cv2.imwrite(str(image), egg_image())
         code, output = self.run_tool(image, "--debug")
         self.assertEqual(code, 0)
-        self.assertIn("candidate(s) after open/close", output)
+        self.assertIn("spot cluster(s):", output)
+        self.assertIn("d_med=", output)
         self.assertIn("EGG", output)
-        self.assertIn("rejected: aspect", output)
         self.assertIn("green=", output)
+        self.assertIn("ellipse=(", output)
 
     def test_rgb_flag_swaps_channels_first(self):
         image = self.folder / "screenshot.png"

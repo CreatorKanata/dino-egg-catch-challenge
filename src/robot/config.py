@@ -40,12 +40,20 @@ CONTROLLER_INPUT_TIMEOUT_S: Final = 0.5
 CONTROLLER_STATE_POLL_INTERVAL_S: Final = 0.2
 
 # --- Overhead camera on the Mac --------------------------------------------------------------
-# Find the index with `lerobot-find-cameras opencv`. 640x480 at 30 fps matches the Pi cameras.
+# Find the index with `lerobot-find-cameras opencv`. The Mac camera's native mode is 1920x1080 at
+# 30 fps (16:9); AVFoundation center-crops 4:3 requests such as 640x480, cutting off the tarp's
+# edges (owner request 2026-09-24: show the whole field). 1280x720 is a universally supported
+# 16:9 mode that keeps the full field. OpenCVCamera raises at connect if the camera does not
+# deliver exactly this size; fall back to 960x540 or 640x360 then (src/robot/README.md).
 TOP_CAMERA_INDEX: Final = 0
 TOP_CAMERA_KEY: Final = "top"
-TOP_CAMERA_WIDTH: Final = 640
-TOP_CAMERA_HEIGHT: Final = 480
+TOP_CAMERA_WIDTH: Final = 1280
+TOP_CAMERA_HEIGHT: Final = 720
+TOP_CAMERA_ASPECT: Final = 16 / 9
 TOP_CAMERA_FPS: Final = 30
+# The top frame is downscaled once per loop frame to this width (aspect kept: 960x540) before it
+# goes to the signboard, Rerun, and captures, keeping the pipe at about 1.5 MB per frame.
+TOP_DISPLAY_WIDTH: Final = 960
 # "bgr" (not the LeRobot default RGB) matches the Pi front/wrist frames, which LeKiwiClient
 # decodes with cv2.imdecode (BGR), so all three Rerun panels share one channel order.
 TOP_CAMERA_COLOR_MODE: Final = "bgr"
@@ -164,10 +172,10 @@ SIGNBOARD_SIZE: Final = (1280, 720)
 SIGNBOARD_FULLSCREEN: Final = False
 SIGNBOARD_TITLE: Final = "Dino Egg Catch Challenge"
 SIGNBOARD_MARGIN: Final = 16
-SIGNBOARD_STATUS_HEIGHT: Final = 96
+SIGNBOARD_STATUS_HEIGHT: Final = 96  # minimum; the status bar takes the height the 16:9 main view leaves
 SIGNBOARD_FRAME_WIDTH: Final = 4
-SIGNBOARD_FONT_SIZE: Final = 36  # pygame default font for now
-SIGNBOARD_SMALL_FONT_SIZE: Final = 24
+SIGNBOARD_FONT_SIZE: Final = 44  # pygame default font for now
+SIGNBOARD_SMALL_FONT_SIZE: Final = 28
 # Camera keys in display order: overhead view large, Pi cameras stacked on the right.
 SIGNBOARD_MAIN_CAMERA: Final = TOP_CAMERA_KEY
 SIGNBOARD_SIDE_CAMERAS: Final = PI_CAMERA_KEYS
@@ -187,63 +195,29 @@ NOTICE_SECONDS: Final = 3.0  # how long a signboard notice ("STOP", "not availab
 RERUN_SESSION_NAME: Final = "dino_drive_mode"
 
 # --- Auto Catch step 1: front-camera egg detection and base alignment (Phase 2) --------------
-# Placeholders, calibrate at the venue with a capture (`c` in the signboard) and
-# `python -m robot.vision.inspect`. The detector values below were checked against the robot's front
-# captures 20260924-220742 (best position), 20260924-220336 (egg with the pink basket behind it),
-# 20260924-220404 (same egg, no basket), and 20260924-222325 (egg farther away, bluish lower half),
-# and against the earlier channel-swapped screenshot; body S <= 50 keeps the white pipe at the left
-# edge out of the egg (S <= 60 already merges them), the gap repair below handles the bluish white.
-# HSV uses OpenCV ranges: H 0-179, S and V 0-255. Each color maps to one or more (low, high) ranges.
-# Body: white incl. the shadowed lower half (V down to 40), but not the blue tarp's highlights (S).
-EGG_BODY_HSV: Final = ((0, 0, 40), (179, 50, 255))
-EGG_SPOT_HSV: Final = {
-    "green": (((35, 60, 15), (100, 255, 255)),),  # teal-looking spots (H up to 100), shadowed down to V 15
-    "blue": (((101, 120, 90), (130, 255, 255)),),  # S/V floor keeps the blue tarp (S 90-150, V < 90) out
-    "red": (((0, 150, 60), (10, 255, 255)), ((170, 150, 60), (179, 255, 255))),  # S >= 150: not the pink basket
-}
-# Pink basket (measured on the robot: H 165-179, S 90-170, V 48-68). Excluded from the body and spot
-# masks so the basket never joins an egg or adds spots. Auto Release will reuse it for its detector.
-BASKET_HSV: Final = ((150, 60, 40), (179, 200, 255))
-EGG_MIN_AREA_PX: Final = 1500
-EGG_ASPECT_RANGE: Final = (0.5, 2.2)  # bbox width / height
-EGG_MIN_SPOTS: Final = 1
-EGG_OPEN_KERNEL_PX: Final = 9  # removes thin clutter (lines, tarp sparkles) before components form
-EGG_CLOSE_KERNEL_PX: Final = 15
-# Shape test runs on the outline closed with max(EGG_CLOSE_KERNEL_PX, fraction * min(w, h)) px, so
-# bites from glare or bluish tarp reflections on the white (capture 20260924-222325) do not fail it.
-# 0.14-0.24 gave one egg on every check capture; 0.12 missed the far egg, 0.26 accepted a false
-# egg at the left edge of 20260924-222325.
-EGG_REPAIR_KERNEL_FRACTION: Final = 0.20
-EGG_MIN_SPOT_AREA_PX: Final = 40
-EGG_MIN_SOLIDITY: Final = 0.85  # contour area / convex hull area: an egg outline is convex
-# Contour area / fitted-ellipse area; only for components clear of the frame border (a partly
-# visible egg is a truncated ellipse, still convex, so it keeps only the solidity test).
-EGG_ELLIPSE_FILL_RANGE: Final = (0.75, 1.25)
-EGG_BORDER_MARGIN_PX: Final = 2  # bbox closer than this to an edge = touches the border
-# Best position: the egg pose in the front image that the pick policy starts from, normalized to
-# the frame (cx, cy: bbox center; w, h: bbox size). The controller uses cx and h only; w only
-# shapes the signboard's egg-outline guide. Values = this detector's own measurement (cx 0.485,
-# cy 0.526, w 0.617, h 0.594) of capture 20260924-220742, taken by the owner with the egg at the
-# best position on 2026-09-24, so target and detector agree. The box excludes the egg's shadowed
-# underside. Re-capture (`c`) and update these if the camera or the pick start pose changes.
+# The egg detector's HSV ranges and segmentation tunables live in robot/vision/config_vision.py
+# (moved to keep this file under 300 lines); the alignment and precondition values stay here.
+# Best position (pick policy start pose), normalized bbox; the controller uses cx and h, w only draws
+# the guide. = the spot-anchored detector's measurement (cx 0.489, cy 0.525, w 0.619, h 0.600) of
+# capture 20260924-220742, taken by the owner at the best position on 2026-09-24; re-capture if needed.
 ALIGN_TARGET_CX: Final = 0.49
 ALIGN_TARGET_CY: Final = 0.53
 ALIGN_TARGET_W: Final = 0.62
-ALIGN_TARGET_H: Final = 0.59
+ALIGN_TARGET_H: Final = 0.60
 ALIGN_TOL_CX: Final = 0.05
-ALIGN_TOL_H: Final = 0.08
+# Height window is asymmetric (owner 2026-09-24: a "done" egg sat too far; closer is fine, farther
+# is not): aligned while target_h - TOL_H_FAR <= h <= target_h + TOL_H_NEAR.
+ALIGN_TOL_H_FAR: Final = 0.02  # the egg may be at most this much smaller (farther) than the target
+ALIGN_TOL_H_NEAR: Final = 0.08  # and at most this much larger (closer)
 # Precondition at the Hi! press: normalized bbox height window.
 AUTO_CATCH_MIN_EGG_H: Final = 0.15  # below: "Egg too far"
 AUTO_CATCH_MAX_EGG_H: Final = 0.85  # above: "Egg too close"
-# Tapered controller (owner request 2026-09-24: slow down progressively near the egg; the first
-# version drove too fast and oscillated). Per axis: ALIGN_MAX_XY * clamp(error / full-speed error,
-# -1, 1), 0 inside the tolerance, and commands below ALIGN_MIN_XY become 0 so the base does not
-# creep. cx and h are smoothed (EMA, ALIGN_SMOOTHING = weight of the new sample) and every
-# command changes by at most ALIGN_MAX_ACCEL * dt per frame. The Pi JPEG stream adds ~100-200 ms
-# of latency, which is why the speeds stay low.
+# Tapered controller (owner request 2026-09-24; the first version oscillated): per axis ALIGN_MAX_XY *
+# clamp(error / full-speed error, -1, 1), 0 inside the tolerance, < ALIGN_MIN_XY -> 0; cx/h EMA-smoothed
+# (weight of the new sample); rate-limited to ALIGN_MAX_ACCEL. The Pi stream adds ~100-200 ms latency.
 ALIGN_MAX_XY: Final = 0.06  # m/s, below the slow level (SPEED_LEVELS[0].xy = 0.1)
 ALIGN_FULL_SPEED_ERROR_CX: Final = 0.18  # normalized cx error at which ALIGN_MAX_XY is reached
-ALIGN_FULL_SPEED_ERROR_H: Final = 0.30  # normalized height error at which ALIGN_MAX_XY is reached
+ALIGN_FULL_SPEED_ERROR_H: Final = 0.08  # normalized height error for ALIGN_MAX_XY (<= 0.08: stall guard)
 ALIGN_MIN_XY: Final = 0.015  # m/s
 ALIGN_SMOOTHING: Final = 0.5
 ALIGN_MAX_ACCEL: Final = 0.15  # m/s^2
@@ -266,22 +240,28 @@ if CONTROLLER_STATE_POLL_INTERVAL_S >= CONTROLLER_INPUT_TIMEOUT_S:
     raise ValueError("CONTROLLER_STATE_POLL_INTERVAL_S must be below CONTROLLER_INPUT_TIMEOUT_S")
 if not (ARM_ENGAGE_SPEED_DEG_S > 0 and ARM_ENGAGE_TOLERANCE_DEG > 0):
     raise ValueError("ARM_ENGAGE_SPEED_DEG_S and ARM_ENGAGE_TOLERANCE_DEG must be positive")
+if abs(TOP_CAMERA_WIDTH / TOP_CAMERA_HEIGHT - TOP_CAMERA_ASPECT) > 0.01:
+    raise ValueError("TOP_CAMERA_WIDTH / TOP_CAMERA_HEIGHT must match TOP_CAMERA_ASPECT")
+if not 0 < TOP_DISPLAY_WIDTH <= TOP_CAMERA_WIDTH:
+    raise ValueError("Need 0 < TOP_DISPLAY_WIDTH <= TOP_CAMERA_WIDTH")
 if KACHI_BUFFER_MAX < max(len(phrase) for phrase, _ in KACHI_PHRASES):
     raise ValueError("KACHI_BUFFER_MAX must hold the longest KachiButton phrase")
-if not (ALIGN_TOL_CX > 0 and ALIGN_TOL_H > 0):
-    raise ValueError("ALIGN_TOL_CX and ALIGN_TOL_H must be positive")
+if not (ALIGN_TOL_CX > 0 and ALIGN_TOL_H_FAR > 0 and ALIGN_TOL_H_NEAR > 0):
+    raise ValueError("ALIGN_TOL_CX, ALIGN_TOL_H_FAR, and ALIGN_TOL_H_NEAR must be positive")
 if not (0 < AUTO_CATCH_MIN_EGG_H < ALIGN_TARGET_H < AUTO_CATCH_MAX_EGG_H <= 1):
     raise ValueError("Need 0 < AUTO_CATCH_MIN_EGG_H < ALIGN_TARGET_H < AUTO_CATCH_MAX_EGG_H <= 1")
 if not (0 <= ALIGN_MIN_XY < ALIGN_MAX_XY and ALIGN_MAX_ACCEL > 0 and 0 < ALIGN_SMOOTHING <= 1):
     raise ValueError("Need 0 <= ALIGN_MIN_XY < ALIGN_MAX_XY, ALIGN_MAX_ACCEL > 0, 0 < ALIGN_SMOOTHING <= 1")
-if not (ALIGN_TOL_CX < ALIGN_FULL_SPEED_ERROR_CX and ALIGN_TOL_H < ALIGN_FULL_SPEED_ERROR_H):
-    raise ValueError("Full-speed errors must exceed the tolerances")
-# Stall guard: just outside a tolerance the tapered command (ALIGN_MAX_XY * tol / full-speed error)
-# must still reach ALIGN_MIN_XY; otherwise the deadband zeroes it while the egg is not "done", and
-# the base sits still until ALIGN_TIMEOUT_S (inside a tolerance the axis is 0 anyway).
-if (ALIGN_MAX_XY * ALIGN_TOL_CX / ALIGN_FULL_SPEED_ERROR_CX < ALIGN_MIN_XY
-        or ALIGN_MAX_XY * ALIGN_TOL_H / ALIGN_FULL_SPEED_ERROR_H < ALIGN_MIN_XY):
-    raise ValueError("Need ALIGN_MAX_XY * tolerance / full-speed error >= ALIGN_MIN_XY on both axes")
+if not (ALIGN_TOL_CX < ALIGN_FULL_SPEED_ERROR_CX and ALIGN_TOL_H_FAR < ALIGN_FULL_SPEED_ERROR_H):
+    raise ValueError("Full-speed errors must exceed ALIGN_TOL_CX and ALIGN_TOL_H_FAR")
+# Stall guard: just outside every tolerance edge the tapered command (ALIGN_MAX_XY * min(1, tol /
+# full-speed error)) must reach ALIGN_MIN_XY, or the deadband zeroes it while the egg is not
+# "done" and the base waits for ALIGN_TIMEOUT_S. The tight far edge is the binding one; equality
+# is allowed (1e-9 absorbs float rounding of 0.06 * 0.02 / 0.08).
+_EDGES = ((ALIGN_TOL_CX, ALIGN_FULL_SPEED_ERROR_CX), (ALIGN_TOL_H_FAR, ALIGN_FULL_SPEED_ERROR_H),
+          (ALIGN_TOL_H_NEAR, ALIGN_FULL_SPEED_ERROR_H))
+if any(ALIGN_MAX_XY * min(1.0, tol / full) < ALIGN_MIN_XY - 1e-9 for tol, full in _EDGES):
+    raise ValueError("Need ALIGN_MAX_XY * min(1, tolerance / full-speed error) >= ALIGN_MIN_XY at every edge")
 if min(ALIGN_DONE_FRAMES, ALIGN_LOST_FRAMES, DETECT_TIMING_FRAMES) < 1 or not ALIGN_TIMEOUT_S > 0:
     raise ValueError("Alignment frame counts must be >= 1 and ALIGN_TIMEOUT_S positive")
 if len(CAPTURE_KEY) != 1 or any(CAPTURE_KEY.lower() in phrase.lower() for phrase, _ in KACHI_PHRASES):

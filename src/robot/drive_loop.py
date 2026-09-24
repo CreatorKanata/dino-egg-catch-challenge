@@ -2,9 +2,10 @@
 
 Polls the controller and the KachiButton commands, reads the leader arm, decides the base
 action and arm pose (manual_mode.py, including a running Auto Catch alignment), sends them,
-then observes: the Pi frames are converted to BGR, the egg detector runs on the front frame in
-Manual Mode (its result drives the next frame's `Hi!` check and alignment), a `capture` command
-saves the raw frames, and the operator (Rerun) and attendee (signboard) views are updated.
+then observes: the Pi frames are converted to BGR, the 16:9 overhead frame is downscaled once,
+the egg detector runs on the front frame in Manual Mode (its result drives the next frame's
+`Hi!` check and alignment), a `capture` command saves the frames (without overlays), and the
+operator (Rerun) and attendee (signboard) views are updated.
 Extracted from teleop_drive.py so the entry point only handles setup and shutdown. The loop
 ends when the display reports ESC, window close, or a dead signboard process; `Stop` does not
 end it. This module must not import pygame (robot.signboard); cv2 is only loaded lazily (by the
@@ -50,6 +51,7 @@ from robot.vision.capture import save_capture
 from robot.vision.egg_detector import detect_eggs
 from robot.vision.egg_size import EggDetection, classify_size
 from robot.vision.frames import normalize_observation_frames
+from robot.vision.top_frame import downscale_to_width
 from robot.vision.timing import record_detect_time
 
 if TYPE_CHECKING:  # top_camera loads cv2 through LeRobot; not needed at runtime here
@@ -193,7 +195,8 @@ def step(devices: DriveDevices, state: LoopState, previous_time: float | None) -
     dt = 0.0 if previous_time is None else now - previous_time
     next_state, controller, sent, commands = _next_state(devices, state, now, dt)
     observation = normalize_observation_frames(devices.adapter.observe())
-    top_frame = devices.camera.read_latest() if devices.camera is not None else None
+    top_raw = devices.camera.read_latest() if devices.camera is not None else None  # 1280x720, for a later tracker
+    top_frame = downscale_to_width(top_raw)  # 960x540 for the signboard, Rerun, and captures
     frames = camera_frames(observation, top_frame)
     next_state, detections = detect_front(next_state, frames)
     if CAPTURE_COMMAND in commands:

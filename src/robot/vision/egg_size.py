@@ -18,7 +18,8 @@ SIZE_CLASSES: Final = ("none", "too_small", "too_large", "ok")
 @dataclass(frozen=True)
 class EggDetection:
     """One egg: bbox center and size normalized to the frame (0..1), spot color, spot count, area,
-    whether the bbox touches the frame border (partly visible egg), and the outline's solidity."""
+    whether the bbox touches the frame border (partly visible egg), the outline's solidity, and
+    its fitted ellipse. Alignment uses the bbox; the signboard draws the ellipse."""
 
     cx: float
     cy: float
@@ -29,6 +30,11 @@ class EggDetection:
     area_px: int
     touches_border: bool = False
     solidity: float = 1.0
+    # Fitted ellipse of the egg outline: center (normalized per axis), first and second axis
+    # lengths divided by the frame width and height, and OpenCV's rotation of the first axis in
+    # degrees. Dividing both axes by the matching frame side keeps it exact on any uniformly scaled
+    # view (the signboard letterbox). None when no ellipse could be fitted.
+    ellipse: tuple[float, float, float, float, float] | None = None
 
 
 class HasHeight(Protocol):

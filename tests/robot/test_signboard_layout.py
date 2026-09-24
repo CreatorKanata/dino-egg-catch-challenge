@@ -10,13 +10,15 @@ import unittest
 
 from robot.config import DEFAULT_THEME
 from robot.dino_controller_reader import INITIAL_STATE
-from robot.display_status import DisplayStatus, Overlay
+from robot.display_status import DisplayStatus, Overlay, front_overlays
+from robot.vision.egg_size import EggDetection
 from robot.drive_state import DriveState
 from robot.signboard_layout import (
     ASCII_GLYPHS,
     UNICODE_GLYPHS,
     Rect,
     compute_layout,
+    overlay_points,
     overlay_rect,
     status_color,
     status_lines,
@@ -65,34 +67,72 @@ class OverlayRectTests(unittest.TestCase):
         corner = overlay_rect(Overlay("front", 0.1, 0.1, 0.2, 0.2, "egg_out", ""), fit)
         self.assertEqual(corner, Rect(10, 20, 64, 48))
 
+    def test_overlay_points_unrotated_and_rotated(self):
+        fit = Rect(0, 0, 400, 300)
+        flat = overlay_points(Overlay("front", 0.5, 0.5, 0.5, 0.2, "target", ""), fit, count=4)
+        self.assertEqual(flat, ((300, 150), (200, 180), (100, 150), (200, 120)))  # a = 100 px, b = 30 px
+        turned = overlay_points(Overlay("front", 0.5, 0.5, 0.5, 0.2, "egg_ok", "", 90.0), fit, count=4)
+        self.assertEqual(turned, ((200, 250), (170, 150), (200, 50), (230, 150)))  # first axis now vertical
+
     def test_tiny_box_keeps_one_pixel(self):
         box = overlay_rect(Overlay("front", 0.5, 0.5, 0.0, 0.0, "egg_ok", ""), Rect(0, 0, 100, 100))
         self.assertEqual((box.w, box.h), (1, 1))
 
 
+class FrontOverlayTests(unittest.TestCase):
+    def test_target_always_in_manual_and_nothing_in_fsc(self):
+        from robot.mode_manager import AppState
+
+        self.assertEqual([overlay.kind for overlay in front_overlays(AppState(), None)], ["target"])
+        self.assertEqual(front_overlays(AppState(mode="fsc"), None), ())
+
+    def test_egg_uses_its_fitted_ellipse_else_its_bbox(self):
+        from robot.mode_manager import AppState
+
+        box_egg = EggDetection(0.5, 0.5, 0.4, 0.5, "green", 5, 9000)
+        fitted = replace(box_egg, ellipse=(0.51, 0.49, 0.38, 0.6, 92.0))
+        plain = front_overlays(AppState(), box_egg)[1]
+        self.assertEqual((plain.cx, plain.w, plain.angle, plain.kind, plain.label),
+                         (0.5, 0.4, 0.0, "egg_ok", "green egg"))
+        rotated = front_overlays(AppState(), fitted)[1]
+        self.assertEqual((rotated.cx, rotated.cy, rotated.w, rotated.h, rotated.angle), (0.51, 0.49, 0.38, 0.6, 92.0))
+        far = front_overlays(AppState(), replace(box_egg, h=0.05))[1]
+        self.assertEqual((far.kind, far.label), ("egg_out", "green egg: too far"))
+
+
 class LayoutTests(unittest.TestCase):
     def test_rects_inside_window_and_disjoint(self):
-        for size in ((1280, 720), (1920, 1080), (640, 480)):
+        for size in ((1280, 720), (1920, 1080), (640, 480), (1280, 1024), (1600, 600)):
             with self.subTest(size=size):
-                layout = compute_layout(size, 16, 96)
+                layout = compute_layout(size, 16, 16 / 9, 96)
                 rects = (layout.main, *layout.sides, layout.status)
                 self.assertTrue(all(inside(rect, size) for rect in rects))
                 for a, b in combinations(rects, 2):
                     self.assertFalse(overlaps(a, b), (a, b))
+                self.assertGreaterEqual(layout.status.h, 96)
 
-    def test_main_takes_about_two_thirds_and_sides_stack(self):
-        layout = compute_layout((1280, 720), 16, 96)
+    def test_main_fits_16_9_and_status_takes_the_rest(self):
+        layout = compute_layout((1280, 720), 16, 16 / 9, 96)
+        self.assertEqual((layout.main.w, layout.main.h), (821, 462))  # round(821 * 9 / 16)
+        self.assertEqual(layout.main.fit(1280, 720), layout.main)  # a 16:9 frame fills it, no bars
         content = layout.main.w + layout.sides[0].w
         self.assertAlmostEqual(layout.main.w / content, 2 / 3, places=2)
         top, bottom = layout.sides
         self.assertEqual(top.x, bottom.x)
         self.assertLess(top.y + top.h, bottom.y)
-        self.assertLess(layout.main.y + layout.main.h, layout.status.y)
+        self.assertEqual(bottom.y + bottom.h, layout.main.y + layout.main.h)
+        self.assertEqual(layout.status.y, layout.main.y + layout.main.h + 16)
+        self.assertEqual(layout.status.y + layout.status.h, 720 - 16)
+        self.assertEqual(layout.status.h, 720 - 3 * 16 - 462)  # 210 px, more than the 96 px minimum
+
+    def test_short_window_caps_main_to_keep_the_status_minimum(self):
+        layout = compute_layout((1600, 400), 16, 16 / 9, 96)
         self.assertEqual(layout.status.h, 96)
+        self.assertEqual(layout.main.h, 400 - 3 * 16 - 96)
 
     def test_too_small_window_is_rejected(self):
         with self.assertRaises(ValueError):
-            compute_layout((100, 100), 16, 96)
+            compute_layout((100, 100), 16, 16 / 9, 96)
 
 
 class StatusTextTests(unittest.TestCase):

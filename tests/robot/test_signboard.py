@@ -63,7 +63,7 @@ class SignboardViewTests(unittest.TestCase):
         self.view.render({**NO_FRAMES, "front": frame}, DriveState(), INITIAL_STATE, DisplayStatus(overlays=overlays))
         from robot.signboard_layout import compute_layout, overlay_rect
 
-        fit = compute_layout(SIZE, 16, 96).sides[0].fit(64, 48)
+        fit = compute_layout(SIZE, 16, 16 / 9, 96).sides[0].fit(64, 48)
         box = overlay_rect(egg, fit)
         left_edge = (box.x + 1, box.y + box.h // 2)  # on the ellipse outline, inside the 3 px line
         self.assertEqual(tuple(self.view.surface.get_at(left_edge))[:3], DEFAULT_THEME.ok)
@@ -74,7 +74,7 @@ class SignboardViewTests(unittest.TestCase):
         egg = Overlay("front", 0.5, 0.4, 0.5, 0.4, "egg_ok", "green egg")
         from robot.signboard_layout import compute_layout, overlay_rect
 
-        fit = compute_layout(SIZE, 16, 96).sides[0].fit(64, 48)
+        fit = compute_layout(SIZE, 16, 16 / 9, 96).sides[0].fit(64, 48)
         box = overlay_rect(target, fit)
         for overlay, color, rows in ((target, DEFAULT_THEME.text, range(box.y + box.h + 1, fit.y + fit.h)),
                                      (egg, DEFAULT_THEME.ok, range(fit.y, box.y - 1))):

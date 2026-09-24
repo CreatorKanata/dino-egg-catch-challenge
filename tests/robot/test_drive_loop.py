@@ -32,6 +32,7 @@ from loop_fakes import (
     FakeLeader,
     FakeReader,
     FakeView,
+    TOP_SMALL,
 )
 from robot.arm_follow import ArmFollowState
 from robot.config import ARM_KEYS, ENCODER_DEGREES_PER_STEP, LOOP_HZ, SPEED_LEVELS, TOP_CAMERA_KEY
@@ -67,11 +68,22 @@ class DriveLoopStepTests(unittest.TestCase):
         self.assertAlmostEqual(parts.adapter.sent[0]["x.vel"], 0.1)
         frames, _, status = view.rendered[0]
         self.assertEqual(list(frames), [TOP_CAMERA_KEY, "front", "wrist"])
-        self.assertEqual((frames[TOP_CAMERA_KEY], frames["wrist"]), ("top-frame", None))  # top untouched
+        self.assertIs(frames[TOP_CAMERA_KEY], TOP_SMALL)  # already small: passed through, not converted
+        self.assertIsNone(frames["wrist"])
         np.testing.assert_array_equal(frames["front"], FRONT_BGR)  # Pi RGB converted to BGR
         np.testing.assert_array_equal(self.detector.call_args.args[0], FRONT_BGR)
         self.assertEqual((status.mode, status.arm_status), ("manual", "no leader"))
         self.assertEqual([overlay.kind for overlay in status.overlays], ["target"])
+
+    def test_large_top_frame_is_downscaled_before_the_signboard(self):
+        camera = FakeCamera()
+        camera.frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        view = FakeView(keep_running=True)
+        downscaled = np.zeros((540, 960, 3), dtype=np.uint8)
+        with mock.patch.object(drive_loop, "downscale_to_width", return_value=downscaled) as downscale:
+            step(devices(FakeReader(FORWARD), view, camera), LoopState(), None)
+        self.assertIs(downscale.call_args.args[0], camera.frame)
+        self.assertIs(view.rendered[0][0][TOP_CAMERA_KEY], downscaled)
 
     def test_detector_skipped_in_fsc(self):
         view = FakeView(keep_running=True, commands=("mode_toggle",))

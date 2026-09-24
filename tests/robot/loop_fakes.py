@@ -22,6 +22,7 @@ NEAR = {key: 1.0 for key in ARM_KEYS}  # within engagement tolerance of HOLD
 DRIVING = LoopState(drive=DriveState(input_lost=False))
 FRONT_RGB = np.array([[[255, 0, 0], [0, 0, 255]]], dtype=np.uint8)  # 1x2: red, blue (RGB order)
 FRONT_BGR = FRONT_RGB[..., ::-1]
+TOP_SMALL = np.zeros((9, 16, 3), dtype=np.uint8)  # 16:9, already below TOP_DISPLAY_WIDTH
 
 
 class FakeReader:
@@ -78,5 +79,10 @@ class FakeView:
 
 
 class FakeCamera:
+    """Overhead camera returning a frame narrower than TOP_DISPLAY_WIDTH, so no resize (no cv2)."""
+
+    def __init__(self):
+        self.frame = TOP_SMALL
+
     def read_latest(self):
-        return "top-frame"
+        return self.frame

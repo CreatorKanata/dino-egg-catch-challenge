@@ -8,6 +8,7 @@ signboard.py draws.
 """
 
 from dataclasses import dataclass
+import math
 
 from robot.config import SignboardTheme
 from robot.dino_controller_reader import ControllerState
@@ -52,7 +53,7 @@ class Rect:
 
 @dataclass(frozen=True)
 class Layout:
-    """Main camera (left two thirds), two stacked side cameras (right third), status bar."""
+    """Main camera (left two thirds, sized for 16:9), two stacked side cameras (right third), status bar."""
 
     main: Rect
     sides: tuple[Rect, Rect]
@@ -80,21 +81,27 @@ ASCII_GLYPHS = Glyphs(filled="#", empty="-", up="UP", down="DOWN", left="LEFT", 
                       rotate_left="CCW", rotate_right="CW")
 
 
-def compute_layout(size: tuple[int, int], margin: int, status_height: int) -> Layout:
-    """Split the window; raise ValueError when it is too small for the margins and status bar."""
+def compute_layout(size: tuple[int, int], margin: int, main_aspect: float, min_status_height: int) -> Layout:
+    """Split the window; raise ValueError when it is too small for the margins and status bar.
+
+    The main panel (left two thirds) is exactly as tall as a `main_aspect` image of its width
+    needs (16:9 overhead view), capped so the status bar keeps `min_status_height`; the two side
+    panels stack in the same height, and the status bar takes all the height that is left.
+    """
     width, height = size
-    content_h = height - status_height - 3 * margin
     content_w = width - 3 * margin
-    side_h = (content_h - margin) // 2
-    if content_w < 3 or side_h < 1 or status_height < 1:
-        raise ValueError(f"Window {width}x{height} is too small for the signboard layout")
     main_w = content_w * 2 // 3
+    main_h = min(round(main_w / main_aspect) if main_aspect > 0 else 0, height - 3 * margin - min_status_height)
+    side_h = (main_h - margin) // 2
+    status_h = height - 3 * margin - main_h
+    if content_w < 3 or side_h < 1 or min_status_height < 1:
+        raise ValueError(f"Window {width}x{height} is too small for the signboard layout")
     side_x = 2 * margin + main_w
     side_w = content_w - main_w
     return Layout(
-        main=Rect(margin, margin, main_w, content_h),
+        main=Rect(margin, margin, main_w, main_h),
         sides=(Rect(side_x, margin, side_w, side_h), Rect(side_x, 2 * margin + side_h, side_w, side_h)),
-        status=Rect(margin, height - margin - status_height, width - 2 * margin, status_height),
+        status=Rect(margin, 2 * margin + main_h, width - 2 * margin, status_h),
     )
 
 
@@ -103,6 +110,23 @@ def overlay_rect(overlay: Overlay, fit_rect: Rect) -> Rect:
     left = fit_rect.x + round((overlay.cx - overlay.w / 2) * fit_rect.w)
     top = fit_rect.y + round((overlay.cy - overlay.h / 2) * fit_rect.h)
     return Rect(left, top, max(1, round(overlay.w * fit_rect.w)), max(1, round(overlay.h * fit_rect.h)))
+
+
+def overlay_points(overlay: Overlay, fit_rect: Rect, count: int = 48) -> tuple[tuple[int, int], ...]:
+    """Window points of the overlay's (possibly rotated) ellipse inside the letterboxed camera rect.
+
+    The letterbox scales both axes equally, so first-axis length w * fit_rect.w and second-axis
+    length h * fit_rect.h are true pixel lengths whatever the angle (OpenCV convention: the angle
+    rotates the first axis from +x toward +y, image y pointing down).
+    """
+    center_x = fit_rect.x + overlay.cx * fit_rect.w
+    center_y = fit_rect.y + overlay.cy * fit_rect.h
+    semi_a, semi_b = overlay.w * fit_rect.w / 2, overlay.h * fit_rect.h / 2
+    cos_t, sin_t = math.cos(math.radians(overlay.angle)), math.sin(math.radians(overlay.angle))
+    steps = (2 * math.pi * index / count for index in range(count))
+    return tuple((round(center_x + semi_a * math.cos(step) * cos_t - semi_b * math.sin(step) * sin_t),
+                  round(center_y + semi_a * math.cos(step) * sin_t + semi_b * math.sin(step) * cos_t))
+                 for step in steps)
 
 
 def _mode_text(status: DisplayStatus) -> str:

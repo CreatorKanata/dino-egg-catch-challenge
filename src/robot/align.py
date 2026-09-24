@@ -5,8 +5,9 @@ in config.py; docs/spec/operating-modes.md, section 4). LeKiwiClient's sign conv
 +x, left = +y): an egg right of the target moves the base right (-y); an egg smaller than the
 target drives forward (+x). Owner request (2026-09-24, the first version oscillated): the speed
 tapers linearly to zero near the target (max_xy * clamp(error / full-speed error, -1, 1)), an axis
-inside its tolerance gets 0, tiny commands become 0, cx and h are smoothed with an exponential
-moving average, and each command changes by at most max_accel * dt per frame. While the egg
+inside its tolerance gets 0 (the height window is asymmetric: closer is fine, farther is not),
+tiny commands become 0, cx and h are smoothed with an exponential moving average, and each
+command changes by at most max_accel * dt per frame. While the egg
 flickers out of detection (fewer than lost_frames consecutive misses) the controller keeps steering
 toward the last smoothed position (robot run 2026-09-24: far eggs flicker). Terminal results
 return zeros at once. Pure and stdlib-only: detections are duck-typed (cx, h).
@@ -29,7 +30,8 @@ from robot.config import (
     ALIGN_TARGET_H,
     ALIGN_TIMEOUT_S,
     ALIGN_TOL_CX,
-    ALIGN_TOL_H,
+    ALIGN_TOL_H_FAR,
+    ALIGN_TOL_H_NEAR,
     LOOP_HZ,
 )
 
@@ -63,7 +65,8 @@ class AlignGains:
     full_speed_error_h: float = ALIGN_FULL_SPEED_ERROR_H
     min_xy: float = ALIGN_MIN_XY
     tol_cx: float = ALIGN_TOL_CX
-    tol_h: float = ALIGN_TOL_H
+    tol_h_far: float = ALIGN_TOL_H_FAR  # egg smaller than the target by at most this
+    tol_h_near: float = ALIGN_TOL_H_NEAR  # egg larger than the target by at most this
     smoothing: float = ALIGN_SMOOTHING
     max_accel: float = ALIGN_MAX_ACCEL
     done_frames: int = ALIGN_DONE_FRAMES
@@ -118,10 +121,10 @@ def smooth(previous: Measurement | None, det: EggLike | None, weight: float = AL
                        h=weight * det.h + (1 - weight) * previous.h)
 
 
-def _taper(error: float, tolerance: float, full_speed_error: float, gains: AlignGains) -> float:
-    """0 inside the tolerance; else max_xy scaled by error / full_speed_error (clamped to +-1),
-    and 0 when that is slower than min_xy."""
-    if abs(error) <= tolerance:
+def _taper(error: float, tol_below: float, tol_above: float, full_speed_error: float, gains: AlignGains) -> float:
+    """0 inside [-tol_below, tol_above]; else max_xy scaled by error / full_speed_error (clamped to
+    +-1), and 0 when that is slower than min_xy."""
+    if -tol_below <= error <= tol_above:
         return 0.0
     command = gains.max_xy * max(-1.0, min(1.0, error / full_speed_error))
     return 0.0 if abs(command) < gains.min_xy else command
@@ -137,13 +140,14 @@ def align_command(
     if det is None:
         return zero_base(), False
     error_cx = det.cx - target.cx
-    error_h = target.h - det.h
+    error_h = target.h - det.h  # > 0: egg smaller (farther) than the target -> forward
     base = {
-        "x.vel": _taper(error_h, gains.tol_h, gains.full_speed_error_h, gains),
-        "y.vel": _taper(-error_cx, gains.tol_cx, gains.full_speed_error_cx, gains),
+        "x.vel": _taper(error_h, gains.tol_h_near, gains.tol_h_far, gains.full_speed_error_h, gains),
+        "y.vel": _taper(-error_cx, gains.tol_cx, gains.tol_cx, gains.full_speed_error_cx, gains),
         "theta.vel": 0.0,
     }
-    return base, abs(error_cx) <= gains.tol_cx and abs(error_h) <= gains.tol_h
+    in_height = -gains.tol_h_near <= error_h <= gains.tol_h_far
+    return base, abs(error_cx) <= gains.tol_cx and in_height
 
 
 def rate_limit(previous: float, wanted: float, dt: float, max_accel: float = ALIGN_MAX_ACCEL) -> float:

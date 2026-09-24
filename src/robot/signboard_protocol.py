@@ -28,7 +28,9 @@ CHANNELS = 3
 DRIVE_FIELDS = ("speed_index", "catch_requested", "input_lost", "pending_rotation_deg")
 CONTROLLER_FIELDS = ("up", "down", "left", "right", "button", "synchronized")
 STATUS_FIELDS = ("mode", "action", "voice_listening", "notice", "arm_status", "stopped", "notice_level")
-OVERLAY_NUMBERS = ("cx", "cy", "w", "h")
+OVERLAY_NUMBERS = ("cx", "cy", "w", "h", "angle")
+# Normalized overlay bounds: a fitted ellipse of a partly visible egg may extend past the frame.
+OVERLAY_BOUNDS = {"cx": (-1.0, 2.0), "cy": (-1.0, 2.0), "w": (0.0, 3.0), "h": (0.0, 3.0), "angle": (-360.0, 360.0)}
 NOTICE_MAX_CHARS = 200
 OVERLAYS_MAX = 8
 OVERLAY_TEXT_MAX_CHARS = 64
@@ -134,9 +136,10 @@ def _short_text(value: Any) -> bool:
     return isinstance(value, str) and len(value) <= OVERLAY_TEXT_MAX_CHARS
 
 
-def _unit(value: Any) -> bool:
-    """A finite number in [0, 1] (normalized overlay coordinates)."""
-    return type(value) in (int, float) and math.isfinite(value) and 0.0 <= value <= 1.0
+def _bounded(key: str, value: Any) -> bool:
+    """A finite number within OVERLAY_BOUNDS[key]."""
+    low, high = OVERLAY_BOUNDS[key]
+    return type(value) in (int, float) and math.isfinite(value) and low <= value <= high
 
 
 def _overlay(fields: Any) -> Overlay | None:
@@ -144,7 +147,7 @@ def _overlay(fields: Any) -> Overlay | None:
         return None
     if not (_short_text(fields.get("camera")) and _short_text(fields.get("label"))):
         return None
-    if not all(_unit(fields.get(key)) for key in OVERLAY_NUMBERS):
+    if not all(_bounded(key, fields.get(key)) for key in OVERLAY_NUMBERS):
         return None
     numbers = {key: float(fields[key]) for key in OVERLAY_NUMBERS}
     return Overlay(camera=fields["camera"], kind=fields["kind"], label=fields["label"], **numbers)

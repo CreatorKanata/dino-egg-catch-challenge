@@ -32,7 +32,8 @@ FRAME = np.arange(4 * 3 * 3, dtype=np.uint8).reshape(3, 4, 3)
 STATUS = DisplayStatus(mode="fsc", action="none", voice_listening=True, notice="Listening...",
                        arm_status="leader fault")
 OVERLAYS = (Overlay("front", 0.56, 0.57, 0.64, 0.69, "target", "place the egg here"),
-            Overlay("front", 0.5, 0.5, 0.2, 0.3, "egg_out", "red egg: too far"))
+            Overlay("front", 0.5, 0.5, 0.2, 0.3, "egg_out", "red egg: too far"),
+            Overlay("front", -0.05, 0.5, 1.2, 0.4, "egg_ok", "green egg", 92.5))  # fitted, past the edge
 
 
 def packet(frames=(("top", FRAME), ("front", None))):
@@ -126,7 +127,9 @@ class ProtocolTests(unittest.TestCase):
             "bad kind": [{**overlay, "kind": "star"}],
             "bad camera": [{**overlay, "camera": 3}],
             "long label": [{**overlay, "label": "x" * 65}],
-            "out of range": [{**overlay, "cx": 1.5}],
+            "out of range": [{**overlay, "cx": 2.5}],
+            "bad angle": [{**overlay, "angle": 400.0}],
+            "nan angle": [{**overlay, "angle": float("nan")}],
             "bool number": [{**overlay, "w": True}],
             "missing number": [{key: value for key, value in overlay.items() if key != "h"}],
         }

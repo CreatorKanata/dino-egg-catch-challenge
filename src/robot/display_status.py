@@ -24,7 +24,9 @@ SIZE_LABEL: Final = {"too_small": "too far", "too_large": "too close"}
 
 @dataclass(frozen=True)
 class Overlay:
-    """A shape on one camera view: bbox center and size normalized to that camera's frame."""
+    """An ellipse on one camera view: center normalized per axis, first and second axis lengths
+    divided by the frame width and height, and the first axis' rotation in degrees (OpenCV
+    convention). With angle 0 it is the ellipse inscribed in a normalized bbox."""
 
     camera: str
     cx: float
@@ -33,6 +35,7 @@ class Overlay:
     h: float
     kind: OverlayKind
     label: str
+    angle: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -54,11 +57,15 @@ TARGET_OVERLAY: Final = Overlay(FRONT_CAMERA_KEY, ALIGN_TARGET_CX, ALIGN_TARGET_
 
 
 def egg_overlay(egg: EggDetection) -> Overlay:
-    """The detection as "egg_ok" (usable size) or "egg_out", labelled with color and size class."""
+    """The detection as "egg_ok" (usable size) or "egg_out", labelled with color and size class;
+    its fitted ellipse when there is one, else the ellipse inscribed in its bbox."""
     size = classify_size(egg)
     kind: OverlayKind = "egg_ok" if size == "ok" else "egg_out"
     label = f"{egg.color} egg" if size == "ok" else f"{egg.color} egg: {SIZE_LABEL[size]}"
-    return Overlay(FRONT_CAMERA_KEY, egg.cx, egg.cy, egg.w, egg.h, kind, label)
+    if egg.ellipse is None:
+        return Overlay(FRONT_CAMERA_KEY, egg.cx, egg.cy, egg.w, egg.h, kind, label)
+    center_x, center_y, axis_a, axis_b, angle = egg.ellipse
+    return Overlay(FRONT_CAMERA_KEY, center_x, center_y, axis_a, axis_b, kind, label, angle)
 
 
 def front_overlays(app: AppState, egg: EggDetection | None) -> tuple[Overlay, ...]:

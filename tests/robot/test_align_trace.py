@@ -28,7 +28,8 @@ class AlignTraceTests(unittest.TestCase):
         path = self.folder / "sub" / "x-align.csv"
         append_row(path, ROW)
         append_row(path, TraceRow(1.0, None, None, 0.6, 0.41, 0.0, 0.0, "lost"))
-        rows = list(csv.reader(path.open()))
+        with path.open(newline="") as handle:
+            rows = list(csv.reader(handle))
         self.assertEqual(rows[0], list(TRACE_COLUMNS))
         self.assertEqual(rows[1], ["0.5000", "0.6100", "0.4000", "0.6000", "0.4100", "0.0100", "-0.0200", "running"])
         self.assertEqual(rows[2][:3] + rows[2][-1:], ["1.0000", "", "", "lost"])

@@ -27,7 +27,8 @@ from robot.align import (
 
 TARGET = AlignTarget(cx=0.5, cy=0.5, h=0.6)
 GAINS = AlignGains(max_xy=0.06, full_speed_error_cx=0.2, full_speed_error_h=0.3, min_xy=0.015, tol_cx=0.05,
-                   tol_h=0.08, smoothing=0.5, max_accel=0.15, done_frames=3, lost_frames=2, timeout_s=10.0)
+                   tol_h_far=0.08, tol_h_near=0.08, smoothing=0.5, max_accel=0.15, done_frames=3, lost_frames=2,
+                   timeout_s=10.0)
 FAST = replace(GAINS, max_accel=1000.0, smoothing=1.0)  # no ramp, no smoothing: pure taper checks
 FRAME = 1 / 30
 
@@ -74,7 +75,7 @@ class TaperTests(unittest.TestCase):
         self.assertTrue(align_command(Egg(0.5 + 0.049, 0.6 - 0.079), TARGET, GAINS)[1])
 
     def test_deadband_with_inconsistent_gains(self):
-        loose = replace(GAINS, tol_cx=0.01, tol_h=0.01)
+        loose = replace(GAINS, tol_cx=0.01, tol_h_far=0.01, tol_h_near=0.01)
         base, done = align_command(Egg(0.5 + 0.03, 0.6 - 0.05), TARGET, loose)  # 0.009 and 0.01 m/s
         self.assertEqual((base, done), (zero_base(), False))
 
@@ -83,14 +84,31 @@ class TaperTests(unittest.TestCase):
 
     def test_config_guards_hold(self):
         for tol, full in ((config.ALIGN_TOL_CX, config.ALIGN_FULL_SPEED_ERROR_CX),
-                          (config.ALIGN_TOL_H, config.ALIGN_FULL_SPEED_ERROR_H)):
-            self.assertGreaterEqual(config.ALIGN_MAX_XY * tol / full, config.ALIGN_MIN_XY)
+                          (config.ALIGN_TOL_H_FAR, config.ALIGN_FULL_SPEED_ERROR_H),
+                          (config.ALIGN_TOL_H_NEAR, config.ALIGN_FULL_SPEED_ERROR_H)):
+            self.assertGreaterEqual(config.ALIGN_MAX_XY * min(1.0, tol / full), config.ALIGN_MIN_XY - 1e-9)
         self.assertLessEqual(config.ALIGN_MAX_XY, config.SPEED_LEVELS[0].xy)
         edge = AlignTarget()
-        egg = Egg(edge.cx + config.ALIGN_TOL_CX + 0.001, edge.h - config.ALIGN_TOL_H - 0.001)
-        base, _ = align_command(egg)
-        self.assertNotEqual(base["x.vel"], 0.0)
-        self.assertNotEqual(base["y.vel"], 0.0)
+        for egg in (Egg(edge.cx + config.ALIGN_TOL_CX + 0.001, edge.h - config.ALIGN_TOL_H_FAR - 0.001),
+                    Egg(edge.cx - config.ALIGN_TOL_CX - 0.001, edge.h + config.ALIGN_TOL_H_NEAR + 0.001)):
+            with self.subTest(egg=egg):
+                base, done = align_command(egg)
+                self.assertFalse(done)
+                self.assertGreaterEqual(abs(base["x.vel"]), config.ALIGN_MIN_XY)
+                self.assertGreaterEqual(abs(base["y.vel"]), config.ALIGN_MIN_XY)
+
+    def test_asymmetric_height_window_with_config_values(self):
+        target = AlignTarget()
+        cases = ((-0.03, "forward"), (-0.01, "done"), (0.05, "done"), (0.10, "backward"))  # egg h - target h
+        for delta, expected in cases:
+            with self.subTest(delta=delta):
+                base, done = align_command(Egg(target.cx, target.h + delta))
+                if expected == "done":
+                    self.assertEqual((base["x.vel"], done), (0.0, True))
+                else:
+                    self.assertFalse(done)
+                    self.assertEqual(base["x.vel"] > 0, expected == "forward")
+                    self.assertNotEqual(base["x.vel"], 0.0)
 
 
 class SmoothingAndRateTests(unittest.TestCase):

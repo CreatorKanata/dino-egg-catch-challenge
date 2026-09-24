@@ -58,6 +58,8 @@ If the path is not under `~/lerobot-dino-egg-catch-challenge`, run `pip install 
 
   On the Mac this was done in the conda env `lerobot312` on 2026-09-24 with `pip install -e ".[lekiwi,viz]"` inside the fork (plus pyserial and pygame-ce); `python -c "import lerobot; print(lerobot.__file__)"` there prints a path under `lerobot-dino-egg-catch-challenge` (verified).
 
+- OpenCV contrib (owner-approved, 2026-09-24): the `lerobot312` env has `opencv-contrib-python-headless==4.13.0.92` instead of the `opencv-python-headless` that LeRobot pulls. Both wheels install the same `cv2` module, so the contrib wheel must replace the plain one in the same env; it adds `cv2.ximgproc` (EdgeDrawing) for the egg detector's optional "edge" spot stage, and LeRobot still imports. `pyproject.toml` lists it for the `uv` setup.
+
 - Calibration files are read from `~/.cache/huggingface/lerobot/calibration/`. Copy the committed files from the fork root before first use on a new machine:
 
   | Fork file | Destination |
@@ -104,14 +106,18 @@ src/robot/
   display_status.py          # frozen DisplayStatus and overlays (target guide, egg) sent to the signboard; pure
   vision/
     egg_size.py              # EggDetection record and the size precondition; pure
-    egg_detector.py          # HSV color + shape egg detector on the front frame, basket excluded (numpy + lazy OpenCV)
+    config_vision.py         # egg detector tunables (HSV ranges, spot clustering, shape rules)
+    egg_masks.py             # color masks, spot blobs, spot clusters (numpy + cv2 passed in)
+    spot_edges.py            # optional EdgeDrawing spot stage (OpenCV contrib)
+    egg_detector.py          # spot-anchored, scale-adaptive egg segmentation + shape rules (lazy OpenCV)
     frames.py                # Pi front/wrist frames RGB -> BGR right after observe() (numpy)
+    top_frame.py             # overhead 1280x720 -> 960x540 once per frame (lazy OpenCV)
     timing.py                # one-time detector timing log; pure
     align_trace.py           # per-frame alignment CSV trace in captures/ (stdlib)
     capture.py               # `c` key: save raw frames + detections to captures/ (lazy OpenCV)
     inspect.py               # offline CLI: python -m robot.vision.inspect <image.png> [--rgb] [--debug]
   leader_arm.py              # SO100Leader wrapper: read_pose() -> six arm_* keys or None (lazy LeRobot)
-  top_camera.py              # OpenCVCamera wrapper for the overhead view
+  top_camera.py              # OpenCVCamera wrapper for the overhead view (1280x720, 16:9: full field of view)
   lekiwi_adapter.py          # LeKiwiClient wrapper: connect + capture arm pose, observe, send base + arm pose, stop
   signboard_layout.py        # pure signboard layout and three-line status text
   signboard.py               # pygame attendee signboard: draw, ESC/close, typed text (child only)
@@ -146,6 +152,7 @@ tests/robot/
   vision/                    # no __init__.py: OpenCV tests kept out of the pygame test process
     test_egg_detector.py
     test_capture_inspect.py
+    test_top_frame.py
 ```
 
 The dino-controller protocol is specified in [dino-controller-protocol.md](dino-controller-protocol.md). The reader buffers to LF, tolerates ESP32 boot text, requires a combined `state` snapshot before applying input, replaces the cached joystick state on every `joystick` or `state` message, and drops held inputs after `ready`, `error`, or a sequence gap. Held directions are not repeated, so the action mapper works from the latest cached state at loop rate rather than from events. Because unchanged inputs produce no traffic, the reader sends `STATE` every 0.2 s so that a 0.5 s silence reliably means input loss.

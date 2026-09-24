@@ -141,6 +141,7 @@ class IsolationTests(unittest.TestCase):
         result = run_isolated(
             "import sys\n"
             "import robot.drive_loop, robot.vision.egg_detector, robot.vision.capture, robot.vision.frames\n"
+            "import robot.vision.top_frame, robot.vision.egg_masks, robot.vision.spot_edges\n"
             "assert 'cv2' not in sys.modules and 'pygame' not in sys.modules\n"
         )
         self.assertEqual(result.returncode, 0, result.stderr.decode())

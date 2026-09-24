@@ -34,6 +34,7 @@ from robot.config import (
     SIGNBOARD_STATUS_HEIGHT,
     SIGNBOARD_TITLE,
     SPEED_LEVELS,
+    TOP_CAMERA_ASPECT,
     SignboardTheme,
 )
 from robot.dino_controller_reader import ControllerState
@@ -45,7 +46,7 @@ from robot.signboard_layout import (
     Glyphs,
     Rect,
     compute_layout,
-    overlay_rect,
+    overlay_points,
     status_color,
     status_lines,
 )
@@ -104,7 +105,7 @@ class SignboardView:
         self._fullscreen = fullscreen
         self._theme = theme
         self._title = title
-        self._layout = compute_layout(size, SIGNBOARD_MARGIN, SIGNBOARD_STATUS_HEIGHT)
+        self._layout = compute_layout(size, SIGNBOARD_MARGIN, TOP_CAMERA_ASPECT, SIGNBOARD_STATUS_HEIGHT)
         self._screen: Any = None
         self._font: Any = None
         self._small_font: Any = None
@@ -177,11 +178,14 @@ class SignboardView:
                             rect.y + SIGNBOARD_FRAME_WIDTH + LABEL_PADDING))
 
     def _draw_overlay(self, screen: Any, overlay: Overlay, fit_rect: Rect) -> None:
-        """Egg-shaped outline (an ellipse inscribed in the box); the target's label goes just below
-        it and a detection's label just above, so the two do not overlap once the egg is aligned."""
+        """Egg-shaped outline (the target's inscribed ellipse or the egg's fitted, possibly rotated
+        ellipse); the target's label goes just below it and a detection's label just above, so
+        the two do not overlap once the egg is aligned."""
         colors = {"target": self._theme.text, "egg_ok": self._theme.ok, "egg_out": self._theme.accent}
-        box = _to_pygame_rect(overlay_rect(overlay, fit_rect))
-        pygame.draw.ellipse(screen, colors[overlay.kind], box, OVERLAY_LINE_PX)
+        points = overlay_points(overlay, fit_rect)
+        pygame.draw.polygon(screen, colors[overlay.kind], points, OVERLAY_LINE_PX)
+        xs, ys = [x for x, _ in points], [y for _, y in points]
+        box = pygame.Rect(min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1)
         if not overlay.label:
             return
         label = self._small_font.render(overlay.label, True, colors[overlay.kind])

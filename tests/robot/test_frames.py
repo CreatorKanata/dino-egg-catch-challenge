@@ -2,14 +2,18 @@
 
 LeKiwiClient returns the front and wrist frames RGB-ordered; normalize_observation_frames must
 swap them to BGR once, leave other entries (the top frame, scalars, missing frames) alone, and
-never modify its input. numpy only, so this runs in the main (OpenCV-free) test process.
+never modify its input. The overhead downscale's pass-through path (small frames, None) is checked
+here too; the actual resize needs OpenCV and is in tests/robot/vision. numpy only, so this runs in
+the main (OpenCV-free) test process.
 """
 
 import unittest
 
 import numpy as np
 
+from robot.config import TOP_DISPLAY_WIDTH
 from robot.vision.frames import normalize_observation_frames, rgb_to_bgr
+from robot.vision.top_frame import downscale_to_width
 
 RGB = np.array([[[255, 0, 0], [0, 255, 0]], [[0, 0, 255], [10, 20, 30]]], dtype=np.uint8)  # 2x2
 BGR = np.array([[[0, 0, 255], [0, 255, 0]], [[255, 0, 0], [30, 20, 10]]], dtype=np.uint8)
@@ -48,6 +52,15 @@ class FramesTests(unittest.TestCase):
     def test_unknown_order_is_rejected(self):
         with self.assertRaises(ValueError):
             normalize_observation_frames({"front": RGB}, "yuv")
+
+
+class TopFramePassThroughTests(unittest.TestCase):
+    def test_small_frames_and_none_are_returned_unchanged(self):
+        small = np.zeros((9, 16, 3), dtype=np.uint8)
+        self.assertIs(downscale_to_width(small), small)
+        exact = np.zeros((540, TOP_DISPLAY_WIDTH, 3), dtype=np.uint8)
+        self.assertIs(downscale_to_width(exact), exact)
+        self.assertIsNone(downscale_to_width(None))
 
 
 if __name__ == "__main__":
