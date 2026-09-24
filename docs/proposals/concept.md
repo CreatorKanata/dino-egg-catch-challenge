@@ -1,9 +1,9 @@
-<!-- docs/concept.md: Consolidate shared planning conversations and the current prize plan for development and exhibition. -->
+<!-- docs/proposals/concept.md: Consolidate shared planning conversations and the current prize plan for development and exhibition. -->
 # Dino Egg Catch Challenge Concept
 
 Updated: 2026-09-06, after reviewing the text of three shared ChatGPT conversations.
 
-This document records the concept and design direction, not implementation completion. It distinguishes explicit user decisions, proposed application text and technical approaches, and outstanding validation. See [Maker Faire materials](makerfaire/README.md) for the application.
+This document records the concept and design direction, not implementation completion. It distinguishes explicit user decisions, proposed application text and technical approaches, and outstanding validation. See [Maker Faire materials](../makerfaire/README.md) for the application.
 
 ## 1. Core experience
 

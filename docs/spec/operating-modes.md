@@ -3,7 +3,7 @@
 
 Written: 2026-09-24. Status: owner decisions on the mode structure, KachiButton mapping, arm engagement, Auto Catch alignment, Auto Release motion, voice input, emergency stop, and home-position handling, recorded from the design discussion on that date; the specification is considered settled for Phase 1. Only Manual Mode's driving half (the former Drive Mode) has been exercised on the robot. Everything else is design intent until the sections below say otherwise.
 
-This document supersedes the three-mode table in [concept.md](../concept.md) (Drive, Puppet, Autonomous). Drive Mode and Puppet Mode run at the same time as Manual Mode; the autonomous experience is split into Auto Catch, Auto Release, and Full Self-Catching.
+This document supersedes the three-mode table in [concept.md](../proposals/concept.md) (Drive, Puppet, Autonomous). Drive Mode and Puppet Mode run at the same time as Manual Mode; the autonomous experience is split into Auto Catch, Auto Release, and Full Self-Catching.
 
 ## 1. Modes (owner decisions, 2026-09-24)
 

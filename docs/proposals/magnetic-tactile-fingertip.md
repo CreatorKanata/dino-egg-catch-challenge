@@ -1,9 +1,9 @@
-<!-- docs/magnetic-tactile-fingertip.md: Research and proposed FDM prototype; separate evidence from unvalidated design choices. -->
+<!-- docs/proposals/magnetic-tactile-fingertip.md: Research and proposed FDM prototype; separate evidence from unvalidated design choices. -->
 # Magnetic Tactile Fingertip: Research and Prototype Plan
 
 Updated: 2026-09-18. Status: v3 crossed-lattice CAD implemented and exported; physical validation pending.
 
-This document describes the proposed REHC2026 experiment for one robot gripper finger. It records the public sources reviewed, the owner's latest dimensions, a concrete starting geometry, and the checks required before calling the prototype functional. The one-piece v3 has parametric source, STL exports, and automated geometry checks. Printing, pause execution, magnet fit, force characterization, sensor acquisition, and classification remain unvalidated. See the [generator instructions](../src/tactile_fingertip/README.md) and [export validation record](../3d-models/tactile-fingertip/README.md). Competition rules and submission requirements are outside this investigation.
+This document describes the proposed REHC2026 experiment for one robot gripper finger. It records the public sources reviewed, the owner's latest dimensions, a concrete starting geometry, and the checks required before calling the prototype functional. The one-piece v3 has parametric source, STL exports, and automated geometry checks. Printing, pause execution, magnet fit, force characterization, sensor acquisition, and classification remain unvalidated. See the [generator instructions](../../src/tactile_fingertip/README.md) and [export validation record](../../3d-models/tactile-fingertip/README.md). Competition rules and submission requirements are outside this investigation.
 
 ## 1. Current requirements and scope
 
@@ -93,7 +93,7 @@ The magnet center is print Z = 1.55. The mounting skin fixes to a separate rigid
 
 The owner's board image specifies CJMCU-90393, 26.3 × 26 mm, with two holes along one edge. The selected [product listing](https://www.amazon.co.jp/dp/B0H8H693VS), inspected on 2026-09-18, states 20.4 × 20.4 mm instead. The supplied image takes precedence provisionally; exact dimensions require measurement. Draft hole centers at X = ±10, Y = +10 mm are image estimates. Board thickness 1.6 mm and active-plane offset 0.5 mm are assumed. The 3.2 mm base holes are trial M3 screw clearances, not measured PCB holes.
 
-The draft uses a 3 mm backing and 3 mm standoffs, with flush countersunk heads on the cushion side and washers/nuts behind the board. It implies 13.95 mm nominal magnet-center-to-active-plane spacing before adhesive. The earlier 10 mm exploratory distance remains a cushion-only fixture setting, not a compatible position inside this base. Check signal/noise at the larger spacing and actual component, header, fastener and jaw clearances. See the [source guide](../src/tactile_fingertip/README.md) for assembly orientation and outstanding fit measurements. No robot-jaw adapter is included.
+The draft uses a 3 mm backing and 3 mm standoffs, with flush countersunk heads on the cushion side and washers/nuts behind the board. It implies 13.95 mm nominal magnet-center-to-active-plane spacing before adhesive. The earlier 10 mm exploratory distance remains a cushion-only fixture setting, not a compatible position inside this base. Check signal/noise at the larger spacing and actual component, header, fastener and jaw clearances. See the [source guide](../../src/tactile_fingertip/README.md) for assembly orientation and outstanding fit measurements. No robot-jaw adapter is included.
 
 ## 4. Pause-and-insert printing procedure
 
@@ -135,9 +135,9 @@ Split training and test sets by complete trial/session and, later, printed speci
 
 ## 6. Implementation and deliverables
 
-The source is under `src/tactile_fingertip/`: `config.py` contains dimensions, `geometry.py` builds the single solid, `generate.py` exports STL, `validation.py` checks geometry, and `preview.py` renders a full view and a true CAD section. See [generation instructions](../src/tactile_fingertip/README.md).
+The source is under `src/tactile_fingertip/`: `config.py` contains dimensions, `geometry.py` builds the single solid, `generate.py` exports STL, `validation.py` checks geometry, and `preview.py` renders a full view and a true CAD section. See [generation instructions](../../src/tactile_fingertip/README.md).
 
-Current outputs are in [tactile-fingertip](../3d-models/tactile-fingertip/README.md). Print `fingertip.stl` in TPU. `mount-draft.stl` is an optional rigid fit prototype with unverified board dimensions. The magnet shown in the preview is a reference and is not included in that print file. Exports are overwritten in place; old models and version subdirectories are not retained.
+Current outputs are in [tactile-fingertip](../../3d-models/tactile-fingertip/README.md). Print `fingertip.stl` in TPU. `mount-draft.stl` is an optional rigid fit prototype with unverified board dimensions. The magnet shown in the preview is a reference and is not included in that print file. Exports are overwritten in place; old models and version subdirectories are not retained.
 
 CadQuery provides the editable parametric source and STL export. [R7] No robot-control software or reference jaw geometry is changed.
 

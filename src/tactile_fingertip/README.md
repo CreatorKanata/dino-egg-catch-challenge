@@ -5,7 +5,7 @@
 
 The default envelope is **20 × 20 × 10 mm**. The pocket is exactly **diameter 3 × height 1.5 mm in CAD**, matching the specified magnet. The radial TPU wall, floor, and roof are each **0.8 mm**. Actual fit still depends on printer and magnet tolerances; no loose-clearance allowance is applied by default.
 
-See [research and design](../../docs/magnetic-tactile-fingertip.md) and [current exports](../../3d-models/tactile-fingertip/README.md). The export directory contains only current files, overwritten in place. V3 adds a full backing skin, crossed rib banks, and internal ties.
+See [research and design](../../docs/proposals/magnetic-tactile-fingertip.md) and [current exports](../../3d-models/tactile-fingertip/README.md). The export directory contains only current files, overwritten in place. V3 adds a full backing skin, crossed rib banks, and internal ties.
 
 ## Generate and test
 

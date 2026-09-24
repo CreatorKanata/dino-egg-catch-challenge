@@ -24,6 +24,6 @@ This repository contains planning documents, SO101 reference models, custom CAD 
 | [docs/dino-controller-protocol.md](docs/dino-controller-protocol.md) | Current JSON v0 messages, STATE command, and recovery |
 | [src/tactile_fingertip/](src/tactile_fingertip/README.md) | Parametric magnetic fingertip CAD, STL export, and geometry checks |
 | [3d-models/](3d-models/README.md) | Reference CAD, custom parts, and fabrication exports |
-| [docs/concept.md](docs/concept.md) | Experience, appearance, prizes, development direction, and sources |
+| [docs/proposals/concept.md](docs/proposals/concept.md) | Concept proposal: experience, appearance, prizes, development direction, and sources |
 | [docs/makerfaire/](docs/makerfaire/README.md) | Current Maker Faire application materials |
 | [AGENTS.md](AGENTS.md) | Shared language and development instructions |

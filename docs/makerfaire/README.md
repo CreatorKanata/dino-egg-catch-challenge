@@ -6,7 +6,7 @@ Updated: 2026-09-06.
 Application materials for DINO EGG Catch Challenge, consolidated from shared planning conversations and the latest prize plan.
 
 - [Application text](application.md)
-- [Project concept](../concept.md)
+- [Project concept](../proposals/concept.md)
 
 ## Event and document status
 
