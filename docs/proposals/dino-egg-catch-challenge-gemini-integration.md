@@ -1,4 +1,4 @@
-<!-- docs/proposals/dino-egg-catch-challenge-gemini-integration.md: Pre-implementation design proposal for the Gemini Robotics ER 2 based Full Self Catch; not a settled specification. -->
+<!-- docs/proposals/dino-egg-catch-challenge-gemini-integration.md: Pre-implementation design proposal for the Gemini Robotics ER 2 based Full Self-Catching; not a settled specification. -->
 # DINO EGG CATCH CHALLENGE — Gemini Robotics 組み込み案
 
 作成日：2026-09-24  
