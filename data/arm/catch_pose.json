@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "recorded_at": "2026-09-25T01:44:16+09:00",
+  "note": "Catch pose: head down, the wrist camera sees the aligned egg. Saved with the CATCH_POSE_KEY.",
+  "pose": {
+    "arm_shoulder_pan.pos": -1.4065934065934067,
+    "arm_shoulder_lift.pos": -104.79120879120879,
+    "arm_elbow_flex.pos": 97.8021978021978,
+    "arm_wrist_flex.pos": 58.285714285714285,
+    "arm_wrist_roll.pos": -4.8791208791208796,
+    "arm_gripper.pos": 1.6051364365971106
+  }
+}
