@@ -1,16 +1,17 @@
 """src/robot/signboard_layout.py: Pure layout and status text for the attendee signboard.
 
-Computes where the three camera views and the status bar go and what the status bar says
-(mode or STOPPED; the resume hint, a notice, the FSC voice hint, or the drive status; arm
-status with speed and directions), using only the stdlib
-(own Rect, not pygame.Rect) so it is unit-tested without a display. signboard.py draws.
+Computes where the three camera views and the status bar go, where a normalized overlay lands
+inside a letterboxed camera view, and what the status bar says (mode or STOPPED; the resume
+hint, a notice, the FSC voice hint, or the drive status; arm status with speed and directions),
+using only the stdlib (own Rect, not pygame.Rect) so it is unit-tested without a display.
+signboard.py draws.
 """
 
 from dataclasses import dataclass
 
 from robot.config import SignboardTheme
 from robot.dino_controller_reader import ControllerState
-from robot.display_status import DisplayStatus
+from robot.display_status import DisplayStatus, Overlay
 from robot.drive_state import DriveState
 
 MODE_TEXT = {"manual": "MANUAL", "fsc": "FSC (demo)"}
@@ -97,6 +98,13 @@ def compute_layout(size: tuple[int, int], margin: int, status_height: int) -> La
     )
 
 
+def overlay_rect(overlay: Overlay, fit_rect: Rect) -> Rect:
+    """Window rect of a normalized overlay inside the letterboxed camera rect (Rect.fit result)."""
+    left = fit_rect.x + round((overlay.cx - overlay.w / 2) * fit_rect.w)
+    top = fit_rect.y + round((overlay.cy - overlay.h / 2) * fit_rect.h)
+    return Rect(left, top, max(1, round(overlay.w * fit_rect.w)), max(1, round(overlay.h * fit_rect.h)))
+
+
 def _mode_text(status: DisplayStatus) -> str:
     if status.stopped:
         return STOPPED_TEXT
@@ -167,8 +175,9 @@ def status_lines(
 def status_color(
     drive: DriveState, theme: SignboardTheme, status: DisplayStatus = DisplayStatus()
 ) -> tuple[int, int, int]:
-    """Warning while stopped or (Manual Mode) input is lost, accent while Catch is requested."""
-    if status.stopped:
+    """Warning while stopped, for a warning notice (rejected Auto Catch, egg lost), or (Manual
+    Mode) when input is lost; accent while Catch is requested."""
+    if status.stopped or (status.notice and status.notice_level == "warning"):
         return theme.warning
     if status.mode != "manual":
         return theme.text

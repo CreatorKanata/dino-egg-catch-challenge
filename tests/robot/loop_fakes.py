@@ -1,0 +1,82 @@
+"""tests/robot/loop_fakes.py: Fake devices shared by the control-loop tests (not a test module).
+
+Stand-ins for the controller reader, LeKiwi adapter, leader arm, overhead camera, and signboard
+(DisplaySink) used by test_drive_loop.py and test_drive_loop_auto_catch.py. The adapter returns
+a tiny RGB-ordered front frame, like LeKiwiClient, so the loop's BGR conversion is observable.
+Imported as a top-level module because the suite is discovered with `-s tests/robot`.
+"""
+
+from dataclasses import replace
+
+import numpy as np
+
+from robot.config import ARM_KEYS
+from robot.dino_controller_reader import INITIAL_STATE
+from robot.drive_state import DriveState
+from robot.manual_mode import LoopState
+
+FORWARD = replace(INITIAL_STATE, synchronized=True, up=True, last_update_monotonic=0.0)
+ZEROS = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
+HOLD = {key: 0.0 for key in ARM_KEYS}
+NEAR = {key: 1.0 for key in ARM_KEYS}  # within engagement tolerance of HOLD
+DRIVING = LoopState(drive=DriveState(input_lost=False))
+FRONT_RGB = np.array([[[255, 0, 0], [0, 0, 255]]], dtype=np.uint8)  # 1x2: red, blue (RGB order)
+FRONT_BGR = FRONT_RGB[..., ::-1]
+
+
+class FakeReader:
+    def __init__(self, state, stale=False, delta=0):
+        self.state, self.stale, self.delta = state, stale, delta
+
+    def poll(self, now):
+        return self.state, self.delta
+
+    def is_stale(self, now):
+        return self.stale
+
+
+class FakeAdapter:
+    """Mimics LeKiwiAdapter.send_action(base, arm_pose): records and holds the last arm pose."""
+
+    def __init__(self):
+        self.sent, self.arms, self.arm_hold = [], [], dict(HOLD)
+
+    def send_action(self, base, arm_pose=None):
+        self.sent.append(dict(base))
+        self.arm_hold = dict(self.arm_hold if arm_pose is None else arm_pose)
+        self.arms.append(self.arm_hold)
+
+    def observe(self):
+        return {"front": FRONT_RGB, "wrist": None, "x.vel": 0.0}
+
+
+class FakeLeader:
+    def __init__(self, pose):
+        self.pose, self.reads = pose, 0
+
+    def read_pose(self):
+        self.reads += 1
+        return None if self.pose is None else dict(self.pose)
+
+
+class FakeView:
+    def __init__(self, keep_running, commands=()):
+        self.keep_running, self.rendered, self.commands = keep_running, [], tuple(commands)
+
+    def render(self, frames, drive, controller, status):
+        self.rendered.append((frames, drive, status))
+
+    def pump(self):
+        return self.keep_running
+
+    def poll_commands(self):
+        commands, self.commands = self.commands, ()
+        return commands
+
+    def close(self):
+        self.keep_running = False
+
+
+class FakeCamera:
+    def read_latest(self):
+        return "top-frame"

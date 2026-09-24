@@ -10,13 +10,14 @@ import unittest
 
 from robot.config import DEFAULT_THEME
 from robot.dino_controller_reader import INITIAL_STATE
-from robot.display_status import DisplayStatus
+from robot.display_status import DisplayStatus, Overlay
 from robot.drive_state import DriveState
 from robot.signboard_layout import (
     ASCII_GLYPHS,
     UNICODE_GLYPHS,
     Rect,
     compute_layout,
+    overlay_rect,
     status_color,
     status_lines,
 )
@@ -50,6 +51,23 @@ class RectFitTests(unittest.TestCase):
     def test_invalid_source_is_rejected(self):
         with self.assertRaises(ValueError):
             Rect(0, 0, 10, 10).fit(0, 10)
+
+
+class OverlayRectTests(unittest.TestCase):
+    def test_maps_normalized_box_into_letterboxed_rect(self):
+        fit = Rect(0, 0, 400, 400).fit(640, 480)  # Rect(0, 50, 400, 300)
+        box = overlay_rect(Overlay("front", 0.5, 0.5, 0.5, 0.5, "target", ""), fit)
+        self.assertEqual(box, Rect(100, 125, 200, 150))
+
+    def test_full_frame_and_offset_rect(self):
+        fit = Rect(10, 20, 320, 240)
+        self.assertEqual(overlay_rect(Overlay("front", 0.5, 0.5, 1.0, 1.0, "egg_ok", ""), fit), fit)
+        corner = overlay_rect(Overlay("front", 0.1, 0.1, 0.2, 0.2, "egg_out", ""), fit)
+        self.assertEqual(corner, Rect(10, 20, 64, 48))
+
+    def test_tiny_box_keeps_one_pixel(self):
+        box = overlay_rect(Overlay("front", 0.5, 0.5, 0.0, 0.0, "egg_ok", ""), Rect(0, 0, 100, 100))
+        self.assertEqual((box.w, box.h), (1, 1))
 
 
 class LayoutTests(unittest.TestCase):
@@ -139,6 +157,13 @@ class StatusTextTests(unittest.TestCase):
         self.assertEqual(status_color(DRIVING, DEFAULT_THEME, DisplayStatus(stopped=True)), DEFAULT_THEME.warning)
         lost = DriveState(input_lost=True)
         self.assertEqual(status_color(lost, DEFAULT_THEME, DisplayStatus(mode="fsc")), DEFAULT_THEME.text)
+
+    def test_warning_notice_uses_warning_color(self):
+        alert = DisplayStatus(notice="Egg too far", notice_level="warning")
+        self.assertEqual(status_color(DRIVING, DEFAULT_THEME, alert), DEFAULT_THEME.warning)
+        self.assertEqual(status_color(DRIVING, DEFAULT_THEME, replace(alert, notice_level="info")), DEFAULT_THEME.text)
+        expired = DisplayStatus(notice="", notice_level="warning")
+        self.assertEqual(status_color(DRIVING, DEFAULT_THEME, expired), DEFAULT_THEME.text)
 
     def test_stopped_latch_lines(self):
         stopped = DisplayStatus(mode="fsc", notice="STOP", stopped=True)

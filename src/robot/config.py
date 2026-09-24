@@ -1,4 +1,4 @@
-"""src/robot/config.py: Central runtime tunables for Manual Mode teleoperation.
+"""src/robot/config.py: Central runtime tunables for Manual Mode and Auto Catch alignment.
 
 Every address, port, rate, speed level, and input-role choice used by src/robot lives here,
 as required by AGENTS.md. Values come from docs/lekiwi-app-development.md and the
@@ -24,9 +24,10 @@ ZMQ_CMD_PORT: Final = 5555  # LeKiwiClientConfig.port_zmq_cmd
 ZMQ_OBSERVATION_PORT: Final = 5556  # LeKiwiClientConfig.port_zmq_observations
 
 # --- dino-controller (USB serial, JSON protocol v0) ----------------------------------------
-# Last verified controller port per docs/dino-controller-encoder.md; override with
-# --controller-port when the Mac assigns a different device name.
-CONTROLLER_SERIAL_PORT: Final = "/dev/cu.usbserial-110"
+# Port used in the owner's Manual Mode session on the robot (2026-09-24; the firmware docs
+# record the earlier /dev/cu.usbserial-110). Override with --controller-port when the Mac
+# assigns a different device name.
+CONTROLLER_SERIAL_PORT: Final = "/dev/cu.usbserial-11130"
 CONTROLLER_BAUD: Final = 115200
 # Longest emitted frame including LF (docs/dino-controller-protocol.md, "Frame buffer").
 CONTROLLER_LINE_MAX_BYTES: Final = 255
@@ -48,6 +49,18 @@ TOP_CAMERA_FPS: Final = 30
 # "bgr" (not the LeRobot default RGB) matches the Pi front/wrist frames, which LeKiwiClient
 # decodes with cv2.imdecode (BGR), so all three Rerun panels share one channel order.
 TOP_CAMERA_COLOR_MODE: Final = "bgr"
+
+# --- Pi cameras (front, wrist) -------------------------------------------------------------
+# Channel order of the frames LeKiwiClient returns. Verified chain in the fork: OpenCVCamera
+# converts BGR->RGB for its default color_mode RGB (camera_opencv.py, configuration_opencv.py;
+# config_lekiwi.py does not override it), lekiwi_host.py cv2.imencode()s that RGB array as if it
+# were BGR, and LeKiwiClient._decode_image cv2.imdecode()s it without a conversion, so the client
+# arrays are RGB-ordered. The parent converts them to BGR once (robot/vision/frames.py); set
+# "bgr" to disable the conversion if the fork ever changes. Owner-confirmed on the signboard.
+PiCameraColorOrder = Literal["rgb", "bgr"]
+PI_CAMERA_COLOR_ORDER: PiCameraColorOrder = "rgb"
+FRONT_CAMERA_KEY: Final = "front"
+PI_CAMERA_KEYS: Final = (FRONT_CAMERA_KEY, "wrist")
 
 # --- Arm during Manual Mode -----------------------------------------------------------------
 # The fork's host writes Goal_Position for every action and fails on an empty arm key set, so
@@ -134,6 +147,7 @@ class SignboardTheme:
     text: tuple[int, int, int]
     accent: tuple[int, int, int]
     warning: tuple[int, int, int]
+    ok: tuple[int, int, int]
 
 
 # Placeholder Jurassic palette; artwork (wood-sign frames, fonts, footprint icons) comes later
@@ -143,7 +157,8 @@ DEFAULT_THEME: Final = SignboardTheme(
     frame=(92, 64, 32),  # earthy brown
     text=(240, 226, 190),  # warm cream
     accent=(220, 120, 40),  # Catch
-    warning=(200, 60, 50),  # input lost
+    warning=(200, 60, 50),  # input lost, rejected Auto Catch
+    ok=(90, 200, 90),  # egg at a usable size
 )
 SIGNBOARD_SIZE: Final = (1280, 720)
 SIGNBOARD_FULLSCREEN: Final = False
@@ -155,7 +170,7 @@ SIGNBOARD_FONT_SIZE: Final = 36  # pygame default font for now
 SIGNBOARD_SMALL_FONT_SIZE: Final = 24
 # Camera keys in display order: overhead view large, Pi cameras stacked on the right.
 SIGNBOARD_MAIN_CAMERA: Final = TOP_CAMERA_KEY
-SIGNBOARD_SIDE_CAMERAS: Final = ("front", "wrist")
+SIGNBOARD_SIDE_CAMERAS: Final = PI_CAMERA_KEYS
 # The signboard runs in its own interpreter (opencv and pygame each bundle SDL2 on macOS).
 SIGNBOARD_PROTOCOL_VERSION: Final = 1
 SIGNBOARD_CHILD_POLL_S: Final = 0.05  # child waits this long for a packet before pumping events
@@ -171,6 +186,52 @@ NOTICE_SECONDS: Final = 3.0  # how long a signboard notice ("STOP", "not availab
 # --- Operator visualization (Rerun, opt-in) ------------------------------------------------
 RERUN_SESSION_NAME: Final = "dino_drive_mode"
 
+# --- Auto Catch step 1: front-camera egg detection and base alignment (Phase 2) --------------
+# Every value below is a placeholder from one screenshot of the owner's front view (640x480);
+# calibrate at the venue with a capture (`c` in the signboard) and `python -m robot.vision.inspect`.
+# HSV uses OpenCV ranges: H 0-179, S and V 0-255. Each color maps to one or more (low, high) ranges.
+# Body: white incl. the shadowed lower half (V down to 40), but not the blue tarp's highlights (S).
+EGG_BODY_HSV: Final = ((0, 0, 40), (179, 50, 255))
+EGG_SPOT_HSV: Final = {
+    "green": (((35, 60, 40), (90, 255, 255)),),  # shadowed spots reach V 40 and hue 85
+    "blue": (((95, 120, 90), (130, 255, 255)),),  # S/V floor keeps the blue tarp (S 90-150, V < 90) out
+    "red": (((0, 90, 60), (10, 255, 255)), ((170, 90, 60), (179, 255, 255))),  # red wraps around H 0
+}
+EGG_MIN_AREA_PX: Final = 1500
+EGG_ASPECT_RANGE: Final = (0.5, 2.2)  # bbox width / height
+EGG_MIN_SPOTS: Final = 1
+EGG_CLOSE_KERNEL_PX: Final = 15
+EGG_MIN_SPOT_AREA_PX: Final = 40
+# Best position: the egg pose in the front image that the pick policy starts from, normalized to
+# the frame (cx, cy: bbox center; w, h: bbox size). The controller uses cx and h only; w only
+# shapes the signboard's egg-outline guide. Placeholders = the detector's own measurement of the
+# reference screenshot (cx 0.562, cy 0.553, w 0.661, h 0.623), so target and detector agree; the
+# detector cuts off the egg's shadowed bottom, hence h is below the egg's visible height. A real
+# `c` capture of the pick policy's start pose replaces these.
+ALIGN_TARGET_CX: Final = 0.56
+ALIGN_TARGET_CY: Final = 0.55
+ALIGN_TARGET_W: Final = 0.66
+ALIGN_TARGET_H: Final = 0.62
+ALIGN_TOL_CX: Final = 0.04
+ALIGN_TOL_H: Final = 0.06
+# Precondition at the Hi! press: normalized bbox height window.
+AUTO_CATCH_MIN_EGG_H: Final = 0.15  # below: "Egg too far"
+AUTO_CATCH_MAX_EGG_H: Final = 0.85  # above: "Egg too close"
+# Proportional controller. ALIGN_MAX_XY equals the slow speed level (SPEED_LEVELS[0].xy); it is
+# not required to stay below it, but 0.1 m/s is the slow level attendees drive at.
+ALIGN_GAIN_Y: Final = 0.8  # m/s per unit of normalized cx error (0.8 x 0.04 = 0.032 >= ALIGN_MIN_XY)
+ALIGN_GAIN_X: Final = 0.5  # m/s per unit of normalized height error
+ALIGN_MAX_XY: Final = 0.1  # m/s
+ALIGN_MIN_XY: Final = 0.03  # m/s; smaller commands become 0 so the base does not creep
+ALIGN_DONE_FRAMES: Final = 10  # consecutive in-tolerance frames -> aligned
+ALIGN_TIMEOUT_S: Final = 15.0
+ALIGN_LOST_FRAMES: Final = 15  # consecutive frames without an egg -> "Egg lost"
+DETECT_TIMING_FRAMES: Final = 30  # detector time is averaged over this many frames and logged once
+# Reference captures (`c` key in the signboard); the directory is git-ignored.
+CAPTURE_DIR: Final = "captures"
+CAPTURE_KEY: Final = "c"
+CAPTURE_COMMAND: Final = "capture"  # signboard -> parent command line for the capture key
+
 if type(ENCODER_CLICKS_PER_REVOLUTION) is not int or ENCODER_CLICKS_PER_REVOLUTION <= 0:
     raise ValueError("ENCODER_CLICKS_PER_REVOLUTION must be a positive int")
 if not ENCODER_ROTATION_SCALE > 0:
@@ -183,3 +244,18 @@ if not (ARM_ENGAGE_SPEED_DEG_S > 0 and ARM_ENGAGE_TOLERANCE_DEG > 0):
     raise ValueError("ARM_ENGAGE_SPEED_DEG_S and ARM_ENGAGE_TOLERANCE_DEG must be positive")
 if KACHI_BUFFER_MAX < max(len(phrase) for phrase, _ in KACHI_PHRASES):
     raise ValueError("KACHI_BUFFER_MAX must hold the longest KachiButton phrase")
+if not (ALIGN_TOL_CX > 0 and ALIGN_TOL_H > 0):
+    raise ValueError("ALIGN_TOL_CX and ALIGN_TOL_H must be positive")
+if not (0 < AUTO_CATCH_MIN_EGG_H < ALIGN_TARGET_H < AUTO_CATCH_MAX_EGG_H <= 1):
+    raise ValueError("Need 0 < AUTO_CATCH_MIN_EGG_H < ALIGN_TARGET_H < AUTO_CATCH_MAX_EGG_H <= 1")
+if not (0 <= ALIGN_MIN_XY < ALIGN_MAX_XY and ALIGN_GAIN_X > 0 and ALIGN_GAIN_Y > 0):
+    raise ValueError("Need 0 <= ALIGN_MIN_XY < ALIGN_MAX_XY and positive alignment gains")
+# Stall guard: just outside a tolerance the proportional command must still reach ALIGN_MIN_XY;
+# otherwise the deadband zeroes it while the egg is not "done", and the base sits still until
+# ALIGN_TIMEOUT_S (inside a tolerance align_command already sends 0 on that axis).
+if ALIGN_GAIN_Y * ALIGN_TOL_CX < ALIGN_MIN_XY or ALIGN_GAIN_X * ALIGN_TOL_H < ALIGN_MIN_XY:
+    raise ValueError("Need ALIGN_GAIN_Y * ALIGN_TOL_CX and ALIGN_GAIN_X * ALIGN_TOL_H >= ALIGN_MIN_XY")
+if min(ALIGN_DONE_FRAMES, ALIGN_LOST_FRAMES, DETECT_TIMING_FRAMES) < 1 or not ALIGN_TIMEOUT_S > 0:
+    raise ValueError("Alignment frame counts must be >= 1 and ALIGN_TIMEOUT_S positive")
+if len(CAPTURE_KEY) != 1 or any(CAPTURE_KEY.lower() in phrase.lower() for phrase, _ in KACHI_PHRASES):
+    raise ValueError("CAPTURE_KEY must be one character that no KachiButton phrase contains")

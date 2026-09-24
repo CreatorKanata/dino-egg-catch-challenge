@@ -1,13 +1,14 @@
 """src/robot/signboard_protocol.py: Pipe formats between Manual Mode and the signboard process.
 
 Parent -> child (stdin): each packet is one UTF-8 JSON header line (drive, controller, mode
-status, frame sizes) followed by the raw HWC uint8 BGR bytes of every frame that has a signal,
-in header order. Child -> parent (stdout): one JSON line per KachiButton command. The signboard
-runs in its own interpreter (opencv and pygame each bundle SDL2 on macOS), so this module uses
-only the stdlib and numpy and is safe to import on both sides.
+status with notice level and overlays, frame sizes) followed by the raw HWC uint8 BGR bytes of
+every frame that has a signal, in header order. Child -> parent (stdout): one JSON line per
+KachiButton command (or "capture"). The signboard runs in its own interpreter (opencv and
+pygame each bundle SDL2 on macOS), so this module uses only the stdlib and numpy and is safe to
+import on both sides.
 """
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
 import math
 from typing import Any, BinaryIO
@@ -16,9 +17,9 @@ import numpy as np
 
 from robot.config import SIGNBOARD_PROTOCOL_VERSION
 from robot.dino_controller_reader import ControllerState
-from robot.display_status import ARM_STATUSES, DisplayStatus
+from robot.display_status import ARM_STATUSES, OVERLAY_KINDS, DisplayStatus, Overlay
 from robot.drive_state import DriveState
-from robot.mode_manager import ACTIONS, MODES
+from robot.mode_manager import ACTIONS, MODES, NOTICE_LEVELS
 
 # Protocol bounds (not tunables): a header is a few hundred bytes; frames are camera-sized.
 HEADER_MAX_BYTES = 64 * 1024
@@ -26,8 +27,11 @@ FRAME_SIDE_MAX = 8192
 CHANNELS = 3
 DRIVE_FIELDS = ("speed_index", "catch_requested", "input_lost", "pending_rotation_deg")
 CONTROLLER_FIELDS = ("up", "down", "left", "right", "button", "synchronized")
-STATUS_FIELDS = ("mode", "action", "voice_listening", "notice", "arm_status", "stopped")
+STATUS_FIELDS = ("mode", "action", "voice_listening", "notice", "arm_status", "stopped", "notice_level")
+OVERLAY_NUMBERS = ("cx", "cy", "w", "h")
 NOTICE_MAX_CHARS = 200
+OVERLAYS_MAX = 8
+OVERLAY_TEXT_MAX_CHARS = 64
 COMMAND_MAX_CHARS = 64
 COMMAND_LINE_MAX_BYTES = 1024
 
@@ -76,7 +80,10 @@ def encode(packet: DisplayPacket | CloseRequest) -> bytes:
         "v": SIGNBOARD_PROTOCOL_VERSION,
         "drive": {field: getattr(packet.drive, field) for field in DRIVE_FIELDS},
         "controller": {field: getattr(packet.controller, field) for field in CONTROLLER_FIELDS},
-        "status": {field: getattr(packet.status, field) for field in STATUS_FIELDS},
+        "status": {
+            **{field: getattr(packet.status, field) for field in STATUS_FIELDS},
+            "overlays": [asdict(overlay) for overlay in packet.status.overlays],
+        },
         "frames": [{"name": entry.name, "w": entry.width, "h": entry.height} for entry, _ in encoded],
     }
     return json.dumps(header).encode("utf-8") + b"\n" + b"".join(body for _, body in encoded)
@@ -123,6 +130,33 @@ def _controller(fields: Any) -> ControllerState | None:
     return ControllerState(**{key: fields[key] for key in CONTROLLER_FIELDS})
 
 
+def _short_text(value: Any) -> bool:
+    return isinstance(value, str) and len(value) <= OVERLAY_TEXT_MAX_CHARS
+
+
+def _unit(value: Any) -> bool:
+    """A finite number in [0, 1] (normalized overlay coordinates)."""
+    return type(value) in (int, float) and math.isfinite(value) and 0.0 <= value <= 1.0
+
+
+def _overlay(fields: Any) -> Overlay | None:
+    if not isinstance(fields, dict) or fields.get("kind") not in OVERLAY_KINDS:
+        return None
+    if not (_short_text(fields.get("camera")) and _short_text(fields.get("label"))):
+        return None
+    if not all(_unit(fields.get(key)) for key in OVERLAY_NUMBERS):
+        return None
+    numbers = {key: float(fields[key]) for key in OVERLAY_NUMBERS}
+    return Overlay(camera=fields["camera"], kind=fields["kind"], label=fields["label"], **numbers)
+
+
+def _overlays(entries: Any) -> tuple[Overlay, ...] | None:
+    if not isinstance(entries, list) or len(entries) > OVERLAYS_MAX:
+        return None
+    overlays = tuple(map(_overlay, entries))
+    return None if any(overlay is None for overlay in overlays) else overlays
+
+
 def _status(fields: Any) -> DisplayStatus | None:
     if not isinstance(fields, dict):
         return None
@@ -133,9 +167,12 @@ def _status(fields: Any) -> DisplayStatus | None:
         return None
     if fields.get("mode") not in MODES or fields.get("action") not in ACTIONS:
         return None
-    if fields.get("arm_status") not in ARM_STATUSES:
+    if fields.get("arm_status") not in ARM_STATUSES or fields.get("notice_level") not in NOTICE_LEVELS:
         return None
-    return DisplayStatus(**{key: fields[key] for key in STATUS_FIELDS})
+    overlays = _overlays(fields.get("overlays"))
+    if overlays is None:
+        return None
+    return DisplayStatus(**{key: fields[key] for key in STATUS_FIELDS}, overlays=overlays)
 
 
 def _frame_entry(entry: Any) -> FramePacket | None:

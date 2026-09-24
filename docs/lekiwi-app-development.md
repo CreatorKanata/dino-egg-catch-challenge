@@ -81,13 +81,13 @@ These calls are verified against the fork source and the working example `exampl
 | Loop timing | `from lerobot.utils.robot_utils import precise_sleep` | Example loop runs at 30 Hz |
 | Optional puppet input | `from lerobot.teleoperators.so_leader import SO100Leader, SO100LeaderConfig` | `get_action()` returns joint keys without the `arm_` prefix; add it before sending |
 
-`get_observation()` returns the nine state keys, an `observation.state` vector, and one BGR image per remote camera (`front`, `wrist`). The reference base-velocity mapping is `LeKiwiClient._from_keyboard_to_base_action`; its three speed levels are 0.1/0.2/0.3 m/s paired with 30/60/90 deg/s.
+`get_observation()` returns the nine state keys, an `observation.state` vector, and one image per remote camera (`front`, `wrist`). These arrays are RGB-ordered, not BGR: the Pi's `OpenCVCamera` converts to RGB (its default `color_mode`, not overridden by `config_lekiwi.py`), `lekiwi_host.py` JPEG-encodes that array with `cv2.imencode` as if it were BGR, and `LeKiwiClient._decode_image` decodes it with `cv2.imdecode` without a conversion (code reading in the fork; the wrong colors were owner-confirmed on the signboard, 2026-09-24). The application converts them to BGR once, right after `get_observation()` (`robot/vision/frames.py`, switchable with `PI_CAMERA_COLOR_ORDER`), so the detector, signboard, captures, and Rerun all receive BGR like the overhead camera. The reference base-velocity mapping is `LeKiwiClient._from_keyboard_to_base_action`; its three speed levels are 0.1/0.2/0.3 m/s paired with 30/60/90 deg/s.
 
 Do not send the overhead camera through `LeKiwiClientConfig.cameras`. That field declares cameras the Pi streams; a Mac-side camera is opened and logged by the application directly.
 
 ## 5. Application layout (implemented, unit-tested without hardware)
 
-Following the working agreements (single-purpose modules, 300-line limit, tunables in `config.py`, hardware-independent tests). The operating modes (Manual Mode, Auto Catch, Auto Release, Full Self-Catching (FSC)) and the KachiButton controls are specified in [spec/operating-modes.md](spec/operating-modes.md). Phase 1 is implemented: Manual Mode (base driving with the dino-controller plus leader-arm puppeteering with slow engagement), the mode manager, KachiButton phrase detection through the signboard, and the mode text on the signboard; Auto Catch, Auto Release, and FSC are display-only stubs that never move the robot. Details, run commands, the KachiButton table, and the input mapping are in [src/robot/README.md](../src/robot/README.md).
+Following the working agreements (single-purpose modules, 300-line limit, tunables in `config.py`, hardware-independent tests). The operating modes (Manual Mode, Auto Catch, Auto Release, Full Self-Catching (FSC)) and the KachiButton controls are specified in [spec/operating-modes.md](spec/operating-modes.md). Phase 1 is implemented: Manual Mode (base driving with the dino-controller plus leader-arm puppeteering with slow engagement), the mode manager, KachiButton phrase detection through the signboard, and the mode text on the signboard. Phase 2 step 1 (unit-tested only, not yet run on the robot): `Hi!` in Manual Mode checks the front-camera egg detection (precondition alerts) and aligns the base to the best egg position; the catch itself, Auto Release, and FSC are still display-only stubs. Details, run commands, the KachiButton table, and the input mapping are in [src/robot/README.md](../src/robot/README.md).
 
 ```
 pyproject.toml               # LeRobot fork [lekiwi,viz] + pyserial + pygame-ce; uv package = false
@@ -97,19 +97,27 @@ src/robot/
   controller_to_action.py    # ControllerState -> {x.vel, y.vel, theta.vel}; pure function
   drive_state.py             # frozen DriveState and the stop/drive decision; pure
   kachi_phrases.py           # typed text -> KachiButton commands (exact phrases, 1 s gap); pure
-  mode_manager.py            # frozen AppState and the Stop / mode toggle / Hi! / Thx rules; pure
+  mode_manager.py            # frozen AppState and the Stop / mode toggle / Hi! / Thx rules, Auto Catch start/finish; pure
+  align.py                   # image-based base alignment controller for Auto Catch; pure
   arm_follow.py              # slow engagement toward the leader pose, then following; pure
-  manual_mode.py             # per-frame composition: commands, base action, arm pose, arm status; pure
-  display_status.py          # frozen DisplayStatus sent to the signboard; pure
+  manual_mode.py             # per-frame composition: commands, alignment, base action, arm pose, arm status; pure
+  display_status.py          # frozen DisplayStatus and overlays (target guide, egg) sent to the signboard; pure
+  vision/
+    egg_size.py              # EggDetection record and the size precondition; pure
+    egg_detector.py          # HSV color egg detector on the front frame (numpy + lazy OpenCV)
+    frames.py                # Pi front/wrist frames RGB -> BGR right after observe() (numpy)
+    timing.py                # one-time detector timing log; pure
+    capture.py               # `c` key: save raw frames + detections to captures/ (lazy OpenCV)
+    inspect.py               # offline CLI: python -m robot.vision.inspect <image.png> [--rgb]
   leader_arm.py              # SO100Leader wrapper: read_pose() -> six arm_* keys or None (lazy LeRobot)
   top_camera.py              # OpenCVCamera wrapper for the overhead view
   lekiwi_adapter.py          # LeKiwiClient wrapper: connect + capture arm pose, observe, send base + arm pose, stop
   signboard_layout.py        # pure signboard layout and three-line status text
   signboard.py               # pygame attendee signboard: draw, ESC/close, typed text (child only)
-  signboard_protocol.py      # pipe packets (JSON header + raw BGR frames) and command lines
+  signboard_protocol.py      # pipe packets (JSON header incl. overlays + raw BGR frames) and command lines
   signboard_process.py       # signboard child entry point; prints KachiButton commands; never imports LeRobot or cv2
   signboard_client.py        # starts the child, streams the newest packet, collects commands
-  drive_loop.py              # one loop iteration + 30 Hz loop: controller, commands, leader, adapter, cameras, views
+  drive_loop.py              # one loop iteration + 30 Hz loop: controller, commands, leader, adapter, cameras, detector, views
   teleop_drive.py            # Manual Mode entry point: CLI, connect, zeros-first shutdown
 tests/robot/
   test_dino_controller_reader.py
@@ -117,6 +125,10 @@ tests/robot/
   test_drive_state.py
   test_kachi_phrases.py
   test_mode_manager.py
+  test_align.py
+  test_egg_size.py
+  test_frames.py
+  test_detect_timing.py
   test_arm_follow.py
   test_manual_mode.py
   test_leader_arm.py
@@ -124,8 +136,14 @@ tests/robot/
   test_signboard_layout.py
   test_signboard.py
   test_drive_loop.py
+  test_drive_loop_auto_catch.py
+  loop_fakes.py              # fake devices shared by the two loop tests
   test_signboard_protocol.py
   test_signboard_client.py
+  test_vision_suite.py       # runs tests/robot/vision (OpenCV) in its own interpreter
+  vision/                    # no __init__.py: OpenCV tests kept out of the pygame test process
+    test_egg_detector.py
+    test_capture_inspect.py
 ```
 
 The dino-controller protocol is specified in [dino-controller-protocol.md](dino-controller-protocol.md). The reader buffers to LF, tolerates ESP32 boot text, requires a combined `state` snapshot before applying input, replaces the cached joystick state on every `joystick` or `state` message, and drops held inputs after `ready`, `error`, or a sequence gap. Held directions are not repeated, so the action mapper works from the latest cached state at loop rate rather than from events. Because unchanged inputs produce no traffic, the reader sends `STATE` every 0.2 s so that a 0.5 s silence reliably means input loss.

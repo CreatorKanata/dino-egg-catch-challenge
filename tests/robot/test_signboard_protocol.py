@@ -13,7 +13,7 @@ import unittest
 import numpy as np
 
 from robot.dino_controller_reader import INITIAL_STATE
-from robot.display_status import DisplayStatus
+from robot.display_status import DisplayStatus, Overlay
 from robot.drive_state import DriveState
 from robot.signboard_protocol import (
     CLOSE_MESSAGE,
@@ -31,6 +31,8 @@ CONTROLLER = replace(INITIAL_STATE, synchronized=True, up=True, right=True, butt
 FRAME = np.arange(4 * 3 * 3, dtype=np.uint8).reshape(3, 4, 3)
 STATUS = DisplayStatus(mode="fsc", action="none", voice_listening=True, notice="Listening...",
                        arm_status="leader fault")
+OVERLAYS = (Overlay("front", 0.56, 0.57, 0.64, 0.69, "target", "place the egg here"),
+            Overlay("front", 0.5, 0.5, 0.2, 0.3, "egg_out", "red egg: too far"))
 
 
 def packet(frames=(("top", FRAME), ("front", None))):
@@ -55,7 +57,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(fields["v"], 1)
         self.assertEqual(fields["status"], {"mode": "fsc", "action": "none", "voice_listening": True,
                                             "notice": "Listening...", "arm_status": "leader fault",
-                                            "stopped": False})
+                                            "stopped": False, "notice_level": "info", "overlays": []})
         self.assertEqual(fields["frames"], [{"name": "top", "w": 4, "h": 3}, {"name": "front", "w": 0, "h": 0}])
         self.assertEqual(body, FRAME.tobytes())
 
@@ -107,6 +109,34 @@ class ProtocolTests(unittest.TestCase):
         for name, data in cases.items():
             with self.subTest(name=name):
                 self.assertIsNone(read_packet(io.BytesIO(data)))
+
+    def test_overlays_and_notice_level_round_trip(self):
+        status = replace(STATUS, notice="Egg too far", notice_level="warning", overlays=OVERLAYS)
+        plain = DisplayPacket(drive=DRIVE, controller=CONTROLLER, frames=(), status=status)
+        self.assertEqual(read_packet(io.BytesIO(encode(plain))).status, status)
+
+    def test_malformed_overlays_return_none(self):
+        status = replace(STATUS, overlays=OVERLAYS[:1])
+        good = json.loads(encode(DisplayPacket(DRIVE, CONTROLLER, (), status)).partition(b"\n")[0])
+        overlay = good["status"]["overlays"][0]
+        bad_overlays = {
+            "not a list": "x",
+            "too many": [overlay] * 9,
+            "not an object": [1],
+            "bad kind": [{**overlay, "kind": "star"}],
+            "bad camera": [{**overlay, "camera": 3}],
+            "long label": [{**overlay, "label": "x" * 65}],
+            "out of range": [{**overlay, "cx": 1.5}],
+            "bool number": [{**overlay, "w": True}],
+            "missing number": [{key: value for key, value in overlay.items() if key != "h"}],
+        }
+        cases = {name: {**good["status"], "overlays": value} for name, value in bad_overlays.items()}
+        cases["bad notice level"] = {**good["status"], "notice_level": "loud"}
+        cases["missing overlays"] = {k: v for k, v in good["status"].items() if k != "overlays"}
+        for name, fields in cases.items():
+            with self.subTest(name=name):
+                line = json.dumps({**good, "status": fields}).encode() + b"\n"
+                self.assertIsNone(read_packet(io.BytesIO(line)))
 
     def test_default_status_round_trip(self):
         plain = DisplayPacket(drive=DRIVE, controller=CONTROLLER, frames=())

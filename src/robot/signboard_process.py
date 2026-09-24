@@ -2,10 +2,11 @@
 
 Reads display packets from stdin and draws them with SignboardView; KachiButton text typed
 into the window is matched by kachi_phrases and each command is written to stdout as one JSON
-line. It runs in its own interpreter because opencv (pulled in by LeRobot) and pygame each
-bundle libSDL2, and both copies cannot safely live in one macOS process. Therefore this module
-must NEVER import lerobot or cv2 (directly or through robot.drive_loop, robot.top_camera,
-robot.lekiwi_adapter, robot.leader_arm, or robot.teleop_drive). Only stdlib, numpy, pygame (via
+line, as is "capture" when the capture key (`c`) is pressed. It runs in its own interpreter
+because opencv (pulled in by LeRobot) and pygame each bundle libSDL2, and both copies cannot
+safely live in one macOS process. Therefore this module must NEVER import lerobot or cv2
+(directly or through robot.drive_loop, robot.top_camera, robot.lekiwi_adapter, robot.leader_arm,
+robot.teleop_drive, or the OpenCV modules of robot.vision). Only stdlib, numpy, pygame (via
 robot.signboard), the protocol, the pure phrase matcher, and config are allowed. Logs go to
 stderr; stdout carries command lines only.
 """
@@ -19,7 +20,7 @@ import time
 from collections.abc import Callable
 from typing import BinaryIO
 
-from robot.config import SIGNBOARD_CHILD_POLL_S, SIGNBOARD_FULLSCREEN, SIGNBOARD_SIZE
+from robot.config import CAPTURE_COMMAND, SIGNBOARD_CHILD_POLL_S, SIGNBOARD_FULLSCREEN, SIGNBOARD_SIZE
 from robot.kachi_phrases import PhraseBuffer, feed
 from robot.signboard import SignboardView
 from robot.signboard_protocol import CloseRequest, encode_command, read_packet
@@ -77,6 +78,8 @@ def serve(
         if result.typed:
             phrases, commands = feed(phrases, result.typed, clock())
             emit_commands(stdout, commands)
+        if result.capture:
+            emit_commands(stdout, (CAPTURE_COMMAND,))
         if not result.keep_running:
             logger.info("Signboard closed by ESC or window close")
             return 0

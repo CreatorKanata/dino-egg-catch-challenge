@@ -121,9 +121,29 @@ class IsolationTests(unittest.TestCase):
         self.assertNotIn(b"objc[", result.stderr)
 
     def test_parent_module_never_loads_pygame(self):
-        result = run_isolated("import robot.teleop_drive, sys\nassert 'pygame' not in sys.modules, 'parent imports pygame'\n")
+        result = run_isolated(
+            "import robot.teleop_drive, sys\nassert 'pygame' not in sys.modules, 'parent imports pygame'\n"
+        )
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertNotIn(b"objc[", result.stderr)
+
+    def test_pure_decision_modules_are_stdlib_only(self):
+        result = run_isolated(
+            "import sys\n"
+            "import robot.align, robot.mode_manager, robot.manual_mode, robot.display_status\n"
+            "import robot.vision.egg_size, robot.vision.timing\n"
+            "loaded = [name for name in ('cv2', 'numpy', 'pygame', 'lerobot') if name in sys.modules]\n"
+            "assert not loaded, loaded\n"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_loop_and_vision_imports_do_not_load_cv2(self):
+        result = run_isolated(
+            "import sys\n"
+            "import robot.drive_loop, robot.vision.egg_detector, robot.vision.capture, robot.vision.frames\n"
+            "assert 'cv2' not in sys.modules and 'pygame' not in sys.modules\n"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
 
 
 class HeadlessEndToEndTests(unittest.TestCase):

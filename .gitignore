@@ -31,6 +31,9 @@ node_modules/
 /dist/
 /build/
 
+# Reference captures from the signboard's capture key (src/robot/vision/capture.py).
+/captures/
+
 # Keep images, CAD sources/exports, and application PDFs tracked.
 
 # Large tablecloth artwork stays local pending explicit size approval.

@@ -2,14 +2,17 @@
 
 Fake devices stand in for the controller, robot, leader arm, camera, and signboard
 (DisplaySink), so the wiring (action sent before viewing, KachiButton commands folded in,
-Stop and mode switches zeroing the base, leader poses reaching send_action once engaged, and
-ESC/close or a dead signboard ending the loop) is verified without hardware. Skipped when
-LeRobot is unavailable.
+Stop and mode switches zeroing the base, leader poses reaching send_action once engaged, the
+Pi frames converted to BGR, and ESC/close or a dead signboard ending the loop) is verified
+without hardware. The egg detector is patched out, so OpenCV is never loaded here; Auto Catch
+wiring is in test_drive_loop_auto_catch.py. Skipped when LeRobot is unavailable.
 """
 
 from dataclasses import replace
 import unittest
 from unittest import mock
+
+import numpy as np
 
 try:
     from robot import drive_loop
@@ -17,76 +20,23 @@ try:
 except ImportError:  # pragma: no cover - depends on the environment
     DriveDevices = None
 
+from loop_fakes import (
+    DRIVING,
+    FORWARD,
+    FRONT_BGR,
+    HOLD,
+    NEAR,
+    ZEROS,
+    FakeAdapter,
+    FakeCamera,
+    FakeLeader,
+    FakeReader,
+    FakeView,
+)
 from robot.arm_follow import ArmFollowState
 from robot.config import ARM_KEYS, ENCODER_DEGREES_PER_STEP, LOOP_HZ, SPEED_LEVELS, TOP_CAMERA_KEY
-from robot.dino_controller_reader import INITIAL_STATE
 from robot.drive_state import DriveState
 from robot.manual_mode import LoopState
-from robot.mode_manager import AppState
-
-FORWARD = replace(INITIAL_STATE, synchronized=True, up=True, last_update_monotonic=0.0)
-ZEROS = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
-HOLD = {key: 0.0 for key in ARM_KEYS}
-NEAR = {key: 1.0 for key in ARM_KEYS}  # within engagement tolerance of HOLD
-DRIVING = LoopState(drive=DriveState(input_lost=False))
-
-
-class FakeReader:
-    def __init__(self, state, stale=False, delta=0):
-        self.state, self.stale, self.delta = state, stale, delta
-
-    def poll(self, now):
-        return self.state, self.delta
-
-    def is_stale(self, now):
-        return self.stale
-
-
-class FakeAdapter:
-    """Mimics LeKiwiAdapter.send_action(base, arm_pose): records and holds the last arm pose."""
-
-    def __init__(self):
-        self.sent, self.arms, self.arm_hold = [], [], dict(HOLD)
-
-    def send_action(self, base, arm_pose=None):
-        self.sent.append(dict(base))
-        self.arm_hold = dict(self.arm_hold if arm_pose is None else arm_pose)
-        self.arms.append(self.arm_hold)
-
-    def observe(self):
-        return {"front": "front-frame", "wrist": None, "x.vel": 0.0}
-
-
-class FakeLeader:
-    def __init__(self, pose):
-        self.pose, self.reads = pose, 0
-
-    def read_pose(self):
-        self.reads += 1
-        return None if self.pose is None else dict(self.pose)
-
-
-class FakeView:
-    def __init__(self, keep_running, commands=()):
-        self.keep_running, self.rendered, self.commands = keep_running, [], tuple(commands)
-
-    def render(self, frames, drive, controller, status):
-        self.rendered.append((frames, drive, status))
-
-    def pump(self):
-        return self.keep_running
-
-    def poll_commands(self):
-        commands, self.commands = self.commands, ()
-        return commands
-
-    def close(self):
-        self.keep_running = False
-
-
-class FakeCamera:
-    def read_latest(self):
-        return "top-frame"
 
 
 def devices(reader, view, camera=None, leader=None):
@@ -94,10 +44,19 @@ def devices(reader, view, camera=None, leader=None):
                         leader=leader)
 
 
+def patch_detector(test):
+    """Replace the egg detector (OpenCV) with a stub that finds nothing."""
+    patcher = mock.patch.object(drive_loop, "detect_eggs", return_value=())
+    detector = patcher.start()
+    test.addCleanup(patcher.stop)
+    return detector
+
+
 class DriveLoopStepTests(unittest.TestCase):
     def setUp(self):
         if DriveDevices is None:
             self.skipTest("LeRobot is not installed")
+        self.detector = patch_detector(self)
 
     def test_forward_command_and_signboard_frames(self):
         view = FakeView(keep_running=True)
@@ -107,8 +66,19 @@ class DriveLoopStepTests(unittest.TestCase):
         self.assertFalse(state.drive.input_lost)
         self.assertAlmostEqual(parts.adapter.sent[0]["x.vel"], 0.1)
         frames, _, status = view.rendered[0]
-        self.assertEqual(frames, {TOP_CAMERA_KEY: "top-frame", "front": "front-frame", "wrist": None})
+        self.assertEqual(list(frames), [TOP_CAMERA_KEY, "front", "wrist"])
+        self.assertEqual((frames[TOP_CAMERA_KEY], frames["wrist"]), ("top-frame", None))  # top untouched
+        np.testing.assert_array_equal(frames["front"], FRONT_BGR)  # Pi RGB converted to BGR
+        np.testing.assert_array_equal(self.detector.call_args.args[0], FRONT_BGR)
         self.assertEqual((status.mode, status.arm_status), ("manual", "no leader"))
+        self.assertEqual([overlay.kind for overlay in status.overlays], ["target"])
+
+    def test_detector_skipped_in_fsc(self):
+        view = FakeView(keep_running=True, commands=("mode_toggle",))
+        state, _, _ = step(devices(FakeReader(FORWARD), view), DRIVING, None)
+        self.assertEqual(state.app.mode, "fsc")
+        self.detector.assert_not_called()
+        self.assertEqual(view.rendered[0][2].overlays, ())
 
     def test_signboard_close_ends_loop_after_sending(self):
         parts = devices(FakeReader(FORWARD, stale=True), FakeView(keep_running=False))
@@ -147,6 +117,7 @@ class ManualModeStepTests(unittest.TestCase):
     def setUp(self):
         if DriveDevices is None:
             self.skipTest("LeRobot is not installed")
+        patch_detector(self)
 
     def test_stop_zeros_base_clears_rotation_disengages_and_holds_arm(self):
         start = replace(DRIVING, drive=replace(DRIVING.drive, pending_rotation_deg=45.0),
@@ -218,14 +189,6 @@ class ManualModeStepTests(unittest.TestCase):
         self.assertEqual(parts.adapter.arms, [HOLD])
         self.assertAlmostEqual(parts.adapter.sent[0]["x.vel"], 0.1)
         self.assertEqual((state.arm_status, state.follow.engaged), ("leader fault", False))
-
-    def test_hi_stub_changes_only_the_display(self):
-        view = FakeView(True, commands=("hi",))
-        parts = devices(FakeReader(FORWARD), view)
-        state, _, _ = step(parts, DRIVING, None)
-        self.assertEqual(state.app, replace(AppState(), notice=state.app.notice, notice_until=state.app.notice_until))
-        self.assertEqual(view.rendered[0][2].notice, "Auto Catch: not available yet")
-        self.assertAlmostEqual(parts.adapter.sent[0]["x.vel"], 0.1)
 
 
 if __name__ == "__main__":

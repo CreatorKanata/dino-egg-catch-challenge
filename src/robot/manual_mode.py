@@ -1,23 +1,36 @@
-"""src/robot/manual_mode.py: Per-frame Manual Mode decisions for the control loop (Phase 1).
+"""src/robot/manual_mode.py: Per-frame Manual Mode decisions for the control loop.
 
-Folds KachiButton commands through the mode manager, then decides the base action (controller
-driving only in Manual Mode, never in a stop frame or while the Stop latch holds) and the arm
-pose (slow engagement, then leader following; held in FSC, while stopped, and on leader
-faults). Split out of drive_loop.py to keep files small. Stdlib-only: no hardware is touched
-here, so every rule is unit-tested.
+Folds KachiButton commands through the mode manager (`Hi!` in Manual Mode with the latest egg
+size class), advances a running Auto Catch alignment, then decides the base action (the
+alignment's command while it runs, else controller driving only in Manual Mode, never in a stop
+frame or while the Stop latch holds) and the arm pose (slow engagement, then leader following;
+held in FSC, while stopped, during an automatic action, and on leader faults). Split out of
+drive_loop.py to keep files small. Stdlib-only: no hardware is touched here, so every rule is
+unit-tested.
 """
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 import logging
 
+from robot.align import align_step
 from robot.arm_follow import ArmFollowState, disengaged, follow_step
 from robot.config import LEFT_RIGHT_ROLE, SPEED_LEVELS
 from robot.controller_to_action import stop_action
 from robot.dino_controller_reader import ControllerState
 from robot.display_status import ArmStatus
 from robot.drive_state import DriveState, select_action
-from robot.mode_manager import AppState, apply_command, expire_notice, manual_control_allowed
+from robot.mode_manager import (
+    AppState,
+    Transition,
+    apply_command,
+    expire_notice,
+    finish_auto_catch,
+    manual_control_allowed,
+    start_auto_catch,
+)
+from robot.vision.egg_size import EggDetection, SizeClass
+from robot.vision.timing import DetectTiming
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +43,8 @@ class LoopState:
     app: AppState = AppState()
     follow: ArmFollowState = ArmFollowState()
     arm_status: ArmStatus = "holding"
+    egg: EggDetection | None = None  # best egg in the latest front frame (Manual Mode only)
+    timing: DetectTiming = DetectTiming()
 
 
 @dataclass(frozen=True)
@@ -41,28 +56,67 @@ class CommandResult:
     disengage_arm: bool
 
 
-def fold_commands(app: AppState, commands: Iterable[str], now: float) -> CommandResult:
-    """Apply commands in arrival order, then expire the notice; stop flags are OR-ed."""
+def _apply(app: AppState, command: str, now: float, egg_size: SizeClass) -> Transition:
+    if command == "hi" and app.mode == "manual":
+        return start_auto_catch(app, egg_size, now)
+    return apply_command(app, command, now)
+
+
+def fold_commands(app: AppState, commands: Iterable[str], now: float, egg_size: SizeClass = "none") -> CommandResult:
+    """Apply commands in arrival order, then expire the notice; stop flags are OR-ed.
+
+    `hi` in Manual Mode goes to start_auto_catch with `egg_size` (the latest front frame's size
+    class); every other command goes to apply_command. Unknown commands ("capture") are no-ops.
+    """
     stop_base = disengage_arm = False
     for command in commands:
-        transition = apply_command(app, command, now)
+        transition = _apply(app, command, now, egg_size)
         app = transition.state
         stop_base = stop_base or transition.stop_base
         disengage_arm = disengage_arm or transition.disengage_arm
     return CommandResult(app=expire_notice(app, now), stop_base=stop_base, disengage_arm=disengage_arm)
 
 
+def step_auto_catch(
+    result: CommandResult, egg: EggDetection | None, now: float
+) -> tuple[CommandResult, dict[str, float] | None]:
+    """Advance a running alignment on this frame's egg; (result, None) when no action runs.
+
+    The returned base action replaces controller driving. A terminal alignment result ends the
+    action (finish_auto_catch): zero velocities this frame and arm following disengaged.
+    """
+    app = result.app
+    if app.action != "auto_catch":
+        return result, None
+    align, base, outcome = align_step(app.align, egg, now)
+    if outcome == "running":
+        return replace(result, app=replace(app, align=align)), base
+    finished = finish_auto_catch(app, outcome, now)
+    return CommandResult(app=finished.state, stop_base=result.stop_base or finished.stop_base,
+                         disengage_arm=True), base
+
+
 def leader_wanted(app: AppState, has_leader: bool) -> bool:
-    """Read the leader only when it can drive the arm: a leader exists, Manual Mode, not stopped."""
+    """Read the leader only when it can drive the arm: a leader exists, Manual Mode, not
+    stopped, and no automatic action running."""
     return has_leader and manual_control_allowed(app)
 
 
 def plan_base(
-    drive: DriveState, controller: ControllerState, app: AppState, stopping: bool
+    drive: DriveState,
+    controller: ControllerState,
+    app: AppState,
+    stopping: bool,
+    auto_base: dict[str, float] | None = None,
 ) -> tuple[DriveState, dict[str, float]]:
-    """Controller driving in Manual Mode; zeros and no pending rotation in FSC, a stop frame, or
-    while the Stop latch holds (manual_control_allowed is False then)."""
-    if manual_control_allowed(app) and not stopping:
+    """A stop frame always sends zeros. Otherwise the automatic action's command when there is
+    one (controller input, including its loss, is ignored), else controller driving in Manual
+    Mode. Zeros and no pending rotation in FSC, while stopped, or with no usable input."""
+    if stopping:
+        return replace(drive, pending_rotation_deg=0.0), stop_action()
+    if auto_base is not None:
+        return replace(drive, pending_rotation_deg=0.0), dict(auto_base)
+    if manual_control_allowed(app):
         return drive, select_action(drive, controller, SPEED_LEVELS, LEFT_RIGHT_ROLE)
     return replace(drive, pending_rotation_deg=0.0), stop_action()
 

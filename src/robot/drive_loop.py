@@ -1,29 +1,53 @@
 """src/robot/drive_loop.py: One Manual Mode control-loop iteration and the fixed-rate loop.
 
 Polls the controller and the KachiButton commands, reads the leader arm, decides the base
-action and arm pose (manual_mode.py), sends them, then updates the operator (Rerun) and
-attendee (signboard) views. Extracted from teleop_drive.py so the entry point only handles
-setup and shutdown. The loop ends when the display reports ESC, window close, or a dead
-signboard process; `Stop` does not end it. This module must not import pygame
-(robot.signboard); cv2-loading LeRobot modules are imported lazily or for type checking only.
+action and arm pose (manual_mode.py, including a running Auto Catch alignment), sends them,
+then observes: the Pi frames are converted to BGR, the egg detector runs on the front frame in
+Manual Mode (its result drives the next frame's `Hi!` check and alignment), a `capture` command
+saves the raw frames, and the operator (Rerun) and attendee (signboard) views are updated.
+Extracted from teleop_drive.py so the entry point only handles setup and shutdown. The loop
+ends when the display reports ESC, window close, or a dead signboard process; `Stop` does not
+end it. This module must not import pygame (robot.signboard); cv2 is only loaded lazily (by the
+LeRobot helpers used here and inside robot.vision), so its unit tests stay free of OpenCV.
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import time
 from typing import TYPE_CHECKING, Any, Protocol
 
 from lerobot.utils.robot_utils import precise_sleep
 
-from robot.config import LOOP_HZ, SIGNBOARD_SIDE_CAMERAS, SPEED_LEVELS, TOP_CAMERA_KEY
+from robot.config import (
+    CAPTURE_COMMAND,
+    FRONT_CAMERA_KEY,
+    LOOP_HZ,
+    SIGNBOARD_SIDE_CAMERAS,
+    SPEED_LEVELS,
+    TOP_CAMERA_KEY,
+)
 from robot.dino_controller_reader import ControllerState, SerialControllerReader
 from robot.arm_follow import disengaged
-from robot.display_status import DisplayStatus, display_status
+from robot.display_status import DisplayStatus, display_status, front_overlays
 from robot.drive_state import DriveState, update_drive_state
 from robot.leader_arm import LeaderArm
 from robot.lekiwi_adapter import LeKiwiAdapter
-from robot.manual_mode import LoopState, fold_commands, leader_wanted, log_changes, plan_arm, plan_base
+from robot.manual_mode import (
+    LoopState,
+    fold_commands,
+    leader_wanted,
+    log_changes,
+    plan_arm,
+    plan_base,
+    step_auto_catch,
+)
+from robot.mode_manager import NOTICE_CAPTURE_FAILED, NOTICE_CAPTURED, with_notice
+from robot.vision.capture import save_capture
+from robot.vision.egg_detector import detect_eggs
+from robot.vision.egg_size import EggDetection, classify_size
+from robot.vision.frames import normalize_observation_frames
+from robot.vision.timing import record_detect_time
 
 if TYPE_CHECKING:  # top_camera loads cv2 through LeRobot; not needed at runtime here
     from robot.top_camera import TopCamera
@@ -89,23 +113,50 @@ def camera_frames(observation: dict[str, Any], top_frame: Any | None) -> dict[st
 
 def _next_state(
     devices: DriveDevices, state: LoopState, now: float, dt: float
-) -> tuple[LoopState, ControllerState, dict[str, float]]:
-    """Steps 1-5 of a frame: inputs and commands, stops, leader, base, then send (returned too)."""
+) -> tuple[LoopState, ControllerState, dict[str, float], tuple[str, ...]]:
+    """Steps 1-5 of a frame: inputs and commands, Auto Catch, stops, leader, base, then send.
+
+    Returns the sent action and this frame's commands as well. The egg used here is the one
+    detected in the previous frame's front image (the newest available).
+    """
     controller, encoder_delta = devices.reader.poll(now)
     stale = devices.reader.is_stale(now)
     commands = devices.view.poll_commands() if devices.view is not None else ()
-    folded = fold_commands(state.app, commands, now)
+    folded = fold_commands(state.app, commands, now, classify_size(state.egg))
+    folded, auto_base = step_auto_catch(folded, state.egg, now)
     follow = disengaged() if folded.disengage_arm else state.follow
     drive = update_drive_state(state.drive, controller, encoder_delta, stale, dt)
     has_leader = devices.leader is not None
     leader_pose = devices.leader.read_pose() if leader_wanted(folded.app, has_leader) else None
     arm_cmd, follow, arm_status = plan_arm(devices.adapter.arm_hold, leader_pose, follow, folded.app, has_leader, dt)
-    drive, base = plan_base(drive, controller, folded.app, folded.stop_base)
+    drive, base = plan_base(drive, controller, folded.app, folded.stop_base, auto_base)
     devices.adapter.send_action(base, arm_cmd)
-    next_state = LoopState(drive=drive, app=folded.app, follow=follow, arm_status=arm_status)
+    next_state = replace(state, drive=drive, app=folded.app, follow=follow, arm_status=arm_status)
     log_transitions(state.drive, drive)
     log_changes(state, next_state)
-    return next_state, controller, {**arm_cmd, **base}
+    return next_state, controller, {**arm_cmd, **base}, tuple(commands)
+
+
+def detect_front(state: LoopState, frames: Mapping[str, Any]) -> tuple[LoopState, tuple[EggDetection, ...]]:
+    """Run the egg detector on the front frame in Manual Mode; remember the best egg and time it."""
+    front = frames.get(FRONT_CAMERA_KEY)
+    if state.app.mode != "manual" or front is None:
+        return replace(state, egg=None), ()
+    started = time.perf_counter()
+    detections = detect_eggs(front)
+    timing = record_detect_time(state.timing, time.perf_counter() - started)
+    return replace(state, egg=detections[0] if detections else None, timing=timing), detections
+
+
+def capture(state: LoopState, frames: Mapping[str, Any], detections: tuple[EggDetection, ...], now: float) -> LoopState:
+    """Save the raw frames and detections; a failed write is logged and shown, never raised."""
+    try:
+        path = save_capture(frames, detections, state.app.mode)
+    except OSError:
+        logger.exception("Capture failed")
+        return replace(state, app=with_notice(state.app, NOTICE_CAPTURE_FAILED, now, level="warning"))
+    logger.info("Captured %s", path)
+    return replace(state, app=with_notice(state.app, NOTICE_CAPTURED, now))
 
 
 def step(devices: DriveDevices, state: LoopState, previous_time: float | None) -> tuple[LoopState, bool, float]:
@@ -115,9 +166,13 @@ def step(devices: DriveDevices, state: LoopState, previous_time: float | None) -
     """
     now = time.monotonic()
     dt = 0.0 if previous_time is None else now - previous_time
-    next_state, controller, sent = _next_state(devices, state, now, dt)
-    observation = devices.adapter.observe()
+    next_state, controller, sent, commands = _next_state(devices, state, now, dt)
+    observation = normalize_observation_frames(devices.adapter.observe())
     top_frame = devices.camera.read_latest() if devices.camera is not None else None
+    frames = camera_frames(observation, top_frame)
+    next_state, detections = detect_front(next_state, frames)
+    if CAPTURE_COMMAND in commands:
+        next_state = capture(next_state, frames, detections, now)
     if devices.use_rerun:
         from lerobot.utils.visualization_utils import log_rerun_data  # loads cv2; only when opted in
 
@@ -125,8 +180,9 @@ def step(devices: DriveDevices, state: LoopState, previous_time: float | None) -
         log_rerun_data(observation=logged, action={**sent, **drive_scalars(next_state)})
     if devices.view is None:
         return next_state, True, now
-    status = display_status(next_state.app, next_state.arm_status)
-    devices.view.render(camera_frames(observation, top_frame), next_state.drive, controller, status)
+    overlays = front_overlays(next_state.app, next_state.egg)
+    status = display_status(next_state.app, next_state.arm_status, overlays)
+    devices.view.render(frames, next_state.drive, controller, status)
     return next_state, devices.view.pump(), now
 
 
