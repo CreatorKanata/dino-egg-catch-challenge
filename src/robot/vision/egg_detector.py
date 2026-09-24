@@ -27,6 +27,7 @@ from robot.vision.egg_masks import (
     frame_masks,
     spot_blobs,
 )
+from robot.vision import egg_refine as refine
 from robot.vision.egg_size import EggDetection
 from robot.vision.spot_edges import edge_spot_blobs
 
@@ -57,6 +58,7 @@ class Candidate:
     touches_border: bool = False
     spots: tuple[tuple[str, int, int], ...] = ()  # (color, blobs, pixels) inside the egg
     ellipse: tuple[float, float, float, float, float] | None = None  # pixels: cx, cy, axis1, axis2, angle
+    stages: tuple = ()  # (stage, frame bbox) of the component, filled when tracing (--debug)
     rejected: str | None = None
 
 
@@ -87,56 +89,49 @@ def _window(cluster: SpotCluster, shape: tuple[int, int], params: DetectorParams
 
 
 def _segment(cv2: Any, masks: FrameMasks, cluster: SpotCluster, window: tuple[int, int, int, int],
-             params: DetectorParams) -> Any | None:
-    """Full-resolution window mask of the component holding the cluster's spots, or None.
-
-    Close (crack) and open (~d/2, glints) run on a copy downscaled so the open kernel stays near
-    KERNEL_MAX_PX; the chosen component is scaled back and intersected with the full-res mask.
-    """
+             params: DetectorParams, trace: bool = False) -> tuple[Any | None, tuple]:
+    """Window mask of the component holding the cluster's spots (or None), and per-stage bboxes when
+    `trace` is set (--debug). Close (crack), edge fence outside the spot hull, open (~d/2, glints),
+    spot vote, then missed spots and the hull cap (egg_refine.py)."""
     wx, wy, ww, wh = window
     colors = {spot.color for spot in cluster.core}  # one color per cluster: other colors stay out
-    full = masks.body[wy:wy + wh, wx:wx + ww]
+    spots = np.zeros((wh, ww), dtype=np.uint8)
     for color in sorted(colors):
-        full = cv2.bitwise_or(full, masks.spots[color][wy:wy + wh, wx:wx + ww])
+        spots = cv2.bitwise_or(spots, masks.spots[color][wy:wy + wh, wx:wx + ww])
+    square = cv2.getStructuringElement(cv2.MORPH_RECT, (_odd(params.close_kernel_px),) * 2)  # separable: fast
+    full = cv2.morphologyEx(cv2.bitwise_or(masks.body[wy:wy + wh, wx:wx + ww], spots), cv2.MORPH_CLOSE, square)
+    spot_pixels = refine.core_spot_pixels(spots, cluster, (wx, wy))
+    fenced = full.copy()
+    fenced[refine.fence(cv2, masks, window, params) & ~refine.spot_hull(cv2, spot_pixels)] = 0
+    chosen = _pick(cv2, fenced, cluster, window, params)
+    if chosen is None:
+        return None, ()
+    component = refine.regrow(cv2, (chosen & (fenced > 0)) | spot_pixels, full, params)
+    missed = refine.missed_spots(cv2, masks, component, cluster, window, params)
+    capped = (component | missed) & refine.hull_cap(cv2, cluster, window, missed, params)
+    stages = ()
+    if trace:
+        loose = _pick(cv2, full, cluster, window, params)
+        stages = (("no fence", refine.box_of(loose & (full > 0), (wx, wy)) if loose is not None else (0, 0, 0, 0)),
+                  ("fenced", refine.box_of(component, (wx, wy))), ("capped", refine.box_of(capped, (wx, wy))))
+    return capped, stages
+
+
+def _pick(cv2: Any, mask: Any, cluster: SpotCluster, window: tuple[int, int, int, int],
+          params: DetectorParams) -> Any | None:
+    """Open (~d/2) at reduced scale; the component touched by the most core spot rings, full res."""
+    wx, wy, ww, wh = window
     open_px = params.open_spot_factor * cluster.d_med
     scale = max(1, math.ceil(open_px / KERNEL_MAX_PX))
-    small = cv2.resize(full, (max(1, ww // scale), max(1, wh // scale)), interpolation=cv2.INTER_NEAREST)
-    small = _morph(cv2, small, cv2.MORPH_CLOSE, _odd(params.close_kernel_px / scale))
+    small = cv2.resize(mask, (max(1, ww // scale), max(1, wh // scale)), interpolation=cv2.INTER_NEAREST)
     small = _morph(cv2, small, cv2.MORPH_OPEN, _odd(open_px / scale))
-    count, labels, _, _ = cv2.connectedComponentsWithStats(small, connectivity=8)
-    rows, cols = labels.shape
-    hits = [labels[min(rows - 1, int((spot.cy - wy) / scale)), min(cols - 1, int((spot.cx - wx) / scale))]
-            for spot in cluster.core]
-    votes = [(sum(1 for hit in hits if hit == label), label) for label in range(1, count)]
-    best = max(votes, default=(0, 0))
-    if best[0] == 0:
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(small, connectivity=8)
+    reach = 2 * params.fence_dilate_px + open_px / 2  # past the fence band and the open's erosion
+    areas = stats[:, cv2.CC_STAT_AREA]
+    best = refine.ring_vote(labels, areas, cluster, (wx, wy), scale, reach)
+    if best == 0:
         return None
-    chosen = cv2.resize((labels == best[1]).astype(np.uint8), (ww, wh), interpolation=cv2.INTER_NEAREST)
-    component = (chosen > 0) & (full > 0)
-    return component | _missed_spots(cv2, masks, component, cluster, window, params)
-
-
-def _missed_spots(cv2: Any, masks: FrameMasks, component: Any, cluster: SpotCluster,
-                  window: tuple[int, int, int, int], params: DetectorParams) -> Any:
-    """Spots the spot stage missed: HSV pixels of the cluster's color inside the component's convex
-    hull, plus whole spot-sized, compact color blobs touching the hull (spots on the egg's edge,
-    which the hull chord would cut). Tarp of the same color is larger than a spot and stays out."""
-    wx, wy, ww, wh = window
-    outlines, _ = cv2.findContours(component.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    hull = np.zeros((wh, ww), dtype=np.uint8)
-    if outlines:
-        cv2.fillConvexPoly(hull, cv2.convexHull(np.concatenate(outlines)), 1)
-    colors = sorted({spot.color for spot in cluster.core})
-    color = masks.colors[colors[0]][wy:wy + wh, wx:wx + ww] > 0  # one spot color per cluster
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(color.astype(np.uint8), connectivity=8)
-    max_area = params.spot_blob_max_factor * math.pi / 4 * cluster.d_med ** 2
-    touching = np.unique(labels[(hull > 0) & color])
-    small = [label for label in touching if label and stats[label, cv2.CC_STAT_AREA] <= max_area
-             and stats[label, cv2.CC_STAT_AREA] >= params.spot_blob_min_extent
-             * stats[label, cv2.CC_STAT_WIDTH] * stats[label, cv2.CC_STAT_HEIGHT]]
-    keep = np.zeros(count, dtype=bool)
-    keep[small] = True
-    return (color & (hull > 0)) | keep[labels]
+    return cv2.resize((labels == best).astype(np.uint8), (ww, wh), interpolation=cv2.INTER_NEAREST) > 0
 
 
 def _repaired(cv2: Any, component: Any, params: DetectorParams) -> tuple[Any, Any]:
@@ -206,12 +201,13 @@ def _spot_counts(cv2: Any, masks: FrameMasks, inside: Any, window: tuple[int, in
     return tuple(counts)
 
 
-def _candidate(cv2: Any, masks: FrameMasks, cluster: SpotCluster, params: DetectorParams) -> Candidate:
+def _candidate(cv2: Any, masks: FrameMasks, cluster: SpotCluster, params: DetectorParams,
+               trace: bool = False) -> Candidate:
     window = _window(cluster, masks.shape, params)
     base = Candidate(cluster_spots=len(cluster.core), d_med=cluster.d_med, window=window)
     if cluster.d_med < params.min_spot_diameter_px:
         return replace(base, rejected="spot size")
-    component = _segment(cv2, masks, cluster, window, params)
+    component, stages = _segment(cv2, masks, cluster, window, params, trace)
     if component is None or not component.any():
         return replace(base, rejected="no component")
     wx, wy = window[:2]
@@ -220,7 +216,7 @@ def _candidate(cv2: Any, masks: FrameMasks, cluster: SpotCluster, params: Detect
     margin = params.border_margin_px
     touches = wx + x < margin or wy + y < margin or wx + x + w > width - margin or wy + y + h > height - margin
     measured = replace(base, x=wx + x, y=wy + y, w=w, h=h, area_px=int(component.sum()), aspect=w / h,
-                       scale=h / cluster.d_med, touches_border=touches)
+                       scale=h / cluster.d_med, touches_border=touches, stages=stages)
     early = _rejection(measured, params, shaped=False)
     if early is not None:
         return replace(measured, rejected=early)
@@ -259,14 +255,17 @@ def _spots(cv2: Any, frame: Any, masks: FrameMasks, params: DetectorParams) -> t
     return masks, spot_blobs(cv2, masks, params)
 
 
-def inspect_candidates(frame_bgr: Any, params: DetectorParams = DEFAULT_PARAMS) -> tuple[Candidate, ...]:
-    """One measured candidate per spot cluster, largest cluster first (for --debug)."""
+def inspect_candidates(
+    frame_bgr: Any, params: DetectorParams = DEFAULT_PARAMS, trace: bool = False
+) -> tuple[Candidate, ...]:
+    """One measured candidate per spot cluster, largest cluster first; `trace` also records the
+    component bbox per stage (no fence / fenced / capped) for --debug."""
     cv2 = _cv2()
     frame = _frame(frame_bgr)
     masks = frame_masks(cv2, frame, params)
     masks, blobs = _spots(cv2, frame, masks, params)
     clusters = cluster_spots(blobs, params.spot_cluster_factor, params.core_spot_factor)
-    return tuple(_candidate(cv2, masks, cluster, params) for cluster in clusters)
+    return tuple(_candidate(cv2, masks, cluster, params, trace) for cluster in clusters)
 
 
 def _as_egg(candidate: Candidate, width: int, height: int) -> EggDetection:

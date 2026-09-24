@@ -26,7 +26,8 @@ PINK = (110, 80, 150)  # BGR: H ~167, S ~119, V 150 -> inside BASKET_HSV
 SPOT_BGR = {"green": (40, 160, 60), "orange": (30, 125, 220), "red_low": (40, 40, 220), "red_high": (59, 43, 200)}
 BASKET_BGR = ((38, 29, 60), (29, 18, 60))  # HSV (171, 132, 60) and (172, 179, 60): the real basket's pink
 SPOT_LAYOUT = ((-0.55, 0.05), (0.55, -0.1), (0.0, -0.6), (0.0, 0.55), (0.05, 0.0))  # x a, y b
-TOLERANCE_PX = 4
+# 8, not 4: the edge fence (a white-background guard) trims the thin rim beyond a spot on the silhouette
+TOLERANCE_PX = 8
 HSV = DetectorParams(spot_detector="hsv")
 TARP_BGR = (72, 44, 26)  # HSV ~ (105, 162, 72): the blue tarp, and the (dropped) blue egg's spots
 BLUE_SPOT_BGR = (70, 30, 10)  # HSV ~ (104, 219, 70): dark blue spot, the same hue as the tarp
@@ -67,7 +68,7 @@ class DetectEggsTests(unittest.TestCase):
         ex, ey, ea, eb, angle = det.ellipse
         self.assertLessEqual(abs(ex * WIDTH - center[0]) + abs(ey * HEIGHT - center[1]), 4)
         axes_px = sorted((ea * WIDTH, eb * HEIGHT))
-        self.assertLessEqual(abs(axes_px[0] - 200) + abs(axes_px[1] - 260), 8)
+        self.assertLessEqual(abs(axes_px[0] - 200) + abs(axes_px[1] - 260), 16)  # rim trimmed by the fence
         self.assertGreater(det.solidity, 0.95)
 
     def test_orange_and_red_variants_on_both_hue_ends(self):
@@ -197,6 +198,30 @@ class DetectEggsTests(unittest.TestCase):
         cv2.circle(frame, (320, 240), 40, SPOT_BGR["green"], -1)  # green disk on tarp: no white ring
         cv2.ellipse(frame, (320, 380), (120, 60), 0, 0, 360, WHITE, -1)  # white shape nearby
         self.assertEqual(inspect_candidates(frame), ())
+        self.assertEqual(detect_eggs(frame), ())
+
+    def test_egg_against_a_white_wall_and_pipe_keeps_a_tight_box(self):
+        frame = background()
+        cv2.rectangle(frame, (0, 0), (639, 175), (215, 215, 220), -1)  # white wall above the tarp line
+        cv2.rectangle(frame, (0, 185), (639, 205), (235, 235, 235), -1)  # white pipe crossing behind the egg
+        center, axes = (320, 270), (130, 100)
+        egg = draw_egg(frame, center, axes, "red_low")
+        cv2.ellipse(egg, center, axes, 0, 0, 360, (150, 150, 150), 2)  # the egg's shaded silhouette
+        detections = detect_eggs(egg)
+        self.assertEqual([det.color for det in detections], ["red"])
+        det = detections[0]
+        top, bottom = (det.cy - det.h / 2) * HEIGHT, (det.cy + det.h / 2) * HEIGHT
+        self.assertGreaterEqual(top, 170 - 1)  # not into the wall or the pipe above the egg's top (y 170)
+        self.assertLessEqual(abs(bottom - 370) + abs(top - 170), 12)  # the top rim meets the wall: trimmed
+        self.assertLessEqual(abs(det.w * WIDTH - 261), TOLERANCE_PX)
+        (candidate,) = inspect_candidates(egg, trace=True)
+        stages = dict(candidate.stages)
+        self.assertGreater(stages["no fence"][3], stages["capped"][3])  # the wall joined without the fence
+
+    def test_white_wall_alone_is_nothing(self):
+        frame = background()
+        cv2.rectangle(frame, (0, 0), (639, 240), (215, 215, 220), -1)
+        cv2.rectangle(frame, (0, 250), (639, 270), (235, 235, 235), -1)
         self.assertEqual(detect_eggs(frame), ())
 
     def test_edge_spot_stage_finds_the_same_egg(self):

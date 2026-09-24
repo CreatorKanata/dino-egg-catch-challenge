@@ -2,14 +2,16 @@
 
 Split out of robot/config.py (which would pass 300 lines otherwise); config.py still holds every
 other runtime value, including the Auto Catch alignment target and size precondition. The Auto
-Release basket detector, its size precondition, and the basket alignment target and tolerances are
-at the end of this file. Stdlib-only.
+Release basket detector, its size precondition, and the basket alignment target and tolerances
+follow, then the Auto Catch wrist-view check at the end of this file. Stdlib-only.
 All values are placeholders: calibrate at the venue with `c` captures and
 `python -m robot.vision.inspect --debug`. Checked against the robot's front captures
 20260924-220742 (best position), -220336 (pink basket behind the egg), -220404 (no basket),
 -222325 (far egg, bluish lower half), -223853 (strong light, glints on the tarp wrinkles), the
 red-spotted egg -225648 (best position, room light), -225701 (extra light), -230143 (pink basket
-directly behind it), -230437, and -232411 (green egg in front, far red egg at the edge).
+directly behind it), -230437, -232411 (green egg in front, far red egg at the edge), 20260925-003436,
+and 20260925-010137/-010212 (red egg at the best position with a white wall, outlets, and a white
+PVC pipe directly behind it); basket-only captures 20260924-232927/-232953/-234124 give no egg.
 Egg colors (owner decisions): green, red, orange; blue-spotted eggs were dropped on 2026-09-24
 (their captures -231156/-231202 remain a regression: no egg of another color may be reported).
 HSV uses OpenCV ranges: H 0-179, S and V 0-255.
@@ -27,20 +29,23 @@ EGG_SPOT_HSV: Final = {
     # Green spot hue medians 76-82 on the five green captures; H 90 is the old boundary to the
     # dropped blue class (blue spot medians were 99-109).
     "green": (((35, 60, 15), (90, 255, 255)),),
-    # Red spots (-225648/-225701/-230143/-230437): S 157-204 (p5-p95), V down to 33 on the shadowed
-    # center spot; hue mostly 172-179, and the low end never above H 4 (p99), so red ends at H 7.
-    "red": (((0, 140, 25), (7, 255, 255)), ((174, 140, 25), (179, 255, 255))),
+    # Red spots: S 157-204 (p5-p95) under the earlier light, but down to S 95-118 (p10) and H 172 in
+    # -010137/-010212; V down to 26 on the shadowed center spot. The low end never exceeds H 4 (p99),
+    # so red ends at H 7 (orange starts at 8).
+    "red": (((0, 100, 25), (7, 255, 255)), ((170, 100, 25), (179, 255, 255))),
     # Orange (painted egg, owner decision 2026-09-24): PLACEHOLDER until the owner captures it;
     # starts above red's H 7.
     "orange": (((8, 120, 60), (25, 255, 255)),),
 }
 # Pink basket (-220336: H p5/50/95 135/172/176, S 77/131/182, V 21/64/73). Two ranges so it never
-# overlaps the red spots: H 150-173 at any S >= 60, and H 174-179 only below the red S floor (140).
+# overlaps the red spots: H 150-169 at any S >= 60, and H 170-179 only below the red S floor (100).
+# Basket and red spots now share H 170-176 at S 100-182; the white-ring spot test, same-color
+# clusters, and the cap keep basket pixels out of eggs (basket-only captures -232927/-232953/-234124
+# give no egg).
 # Excluded from the body and the green/orange spot masks; the red mask drops only the first range
-# (the second is below its S floor anyway). A few basket pixels at H 174-176 with S up to ~182 can
-# still reach the red mask; the cluster, scale, and spot-fraction rules reject them. Auto Release
+# (the second is below its S floor anyway). Auto Release
 # uses the looser BASKET_DETECT_HSV below for its basket detector.
-BASKET_HSV: Final = (((150, 60, 20), (173, 255, 255)), ((174, 60, 20), (179, 139, 255)))
+BASKET_HSV: Final = (((150, 60, 20), (169, 255, 255)), ((170, 60, 20), (179, 99, 255)))
 BASKET_EXCLUDED_FROM_RED: Final = BASKET_HSV[:1]
 
 # Segmentation is anchored on the spots and scaled by their size (robot run 2026-09-24: under a
@@ -75,6 +80,14 @@ EGG_CORE_SPOT_FACTOR: Final = 0.35
 EGG_WINDOW_FACTOR: Final = 2.0  # search window = cluster bbox grown by this x median d per side
 EGG_CLOSE_KERNEL_PX: Final = 15  # joins the body across thin dark lines (the shell's crack)
 EGG_OPEN_SPOT_FACTOR: Final = 0.5  # then an open of this x median d removes glints thinner than that
+# White backgrounds (wall, PVC pipe, clothes; -010137/-010212) touch the egg and pass the body mask.
+# Edge fence: Canny (low, high) edges of the window's V channel, dilated by EGG_FENCE_DILATE_PX, are
+# removed after the crack close; the egg body is then picked by spot ring votes (egg_refine.py).
+EGG_FENCE_CANNY: Final = (40, 120)
+EGG_FENCE_DILATE_PX: Final = 3
+# Hull cap: the component is cut to the core spots' convex hull grown by this x d. On all check
+# captures the egg bbox reaches at most 1.02 d beyond its spots' bbox, so 1.4 leaves margin.
+EGG_HULL_CAP_FACTOR: Final = 1.4
 # Spot-colored pixels inside the egg's convex hull join it (spots the spot stage missed); whole
 # spot-colored blobs touching the egg join too when no larger than this x a spot's area (pi/4 d^2),
 # so spots on the egg's edge are not cut by the hull, while background of the spot's color stays out.
@@ -138,3 +151,12 @@ _EDGES = ((RELEASE_TOL_CX, ALIGN_FULL_SPEED_ERROR_CX), (RELEASE_TOL_W_FAR, ALIGN
           (RELEASE_TOL_W_NEAR, ALIGN_FULL_SPEED_ERROR_H))
 if any(ALIGN_MAX_XY * min(1.0, tol / full) < ALIGN_MIN_XY - 1e-9 for tol, full in _EDGES):
     raise ValueError("Need ALIGN_MAX_XY * min(1, release tolerance / full-speed error) >= ALIGN_MIN_XY")
+
+# --- Wrist-view egg check at the catch pose (Auto Catch, Phase 3 step 1; robot/vision/wrist_check.py) --
+# Disabled until verified: enable after the owner captures wrist frames at the catch pose (`c` saves
+# them) and `python -m robot.vision.inspect captures/<stamp>-wrist.png --wrist` confirms detections.
+WRIST_CHECK_ENABLED: Final = False
+WRIST_CHECK_FRAMES: Final = 10  # frames held at the catch pose; an egg in any of them passes the check
+WRIST_MIN_SPOT_CLUSTER: Final = 2  # partial egg: at least this many ringed spots of one color in a cluster
+if not (WRIST_CHECK_FRAMES >= 1 and WRIST_MIN_SPOT_CLUSTER >= 1):
+    raise ValueError("WRIST_CHECK_FRAMES and WRIST_MIN_SPOT_CLUSTER must be >= 1")

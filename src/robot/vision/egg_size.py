@@ -1,7 +1,8 @@
-"""src/robot/vision/egg_size.py: The egg detection record and the Auto Catch size precondition.
+"""src/robot/vision/egg_size.py: The egg detection records and the Auto Catch size precondition.
 
 EggDetection is plain data (normalized bbox, spot color), produced by egg_detector.py and read by
-the alignment controller, the mode manager, and the signboard overlays. classify_size() is the
+the alignment controller, the mode manager, and the signboard overlays. WristView is the result of
+the wrist-view check at the catch pose (wrist_check.py), carried by the loop state. classify_size() is the
 precondition checked at the Hi! press (docs/spec/operating-modes.md, section 4). Stdlib-only, so
 the pure decision modules and the signboard child can import it without OpenCV.
 """
@@ -35,6 +36,17 @@ class EggDetection:
     # degrees. Dividing both axes by the matching frame side keeps it exact on any uniformly scaled
     # view (the signboard letterbox). None when no ellipse could be fitted.
     ellipse: tuple[float, float, float, float, float] | None = None
+
+
+@dataclass(frozen=True)
+class WristView:
+    """An egg in the wrist view: spot color, whether only a spot cluster was found (partial egg),
+    and its center normalized to the frame."""
+
+    color: str
+    partial: bool
+    cx: float
+    cy: float
 
 
 class HasHeight(Protocol):

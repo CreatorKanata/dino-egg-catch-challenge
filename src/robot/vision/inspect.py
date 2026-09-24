@@ -7,7 +7,9 @@ robot. `--debug` also lists every spot cluster (core spots, median spot diameter
 with its egg measurements and the rule that rejected it. `--rgb` reads an RGB-ordered image, such as a
 signboard screenshot of the Pi cameras taken before the color-order fix (PI_CAMERA_COLOR_ORDER in
 config.py). `--basket` also runs the Auto Release basket detector, prints its bbox, size class, and
-average time, and draws its box and the release target.
+average time, and draws its box and the release target. `--wrist` also runs the Auto Catch
+wrist-view check (wrist_check.py) on the image, normally a `c` capture of the wrist camera at the
+catch pose, and prints the result (full or partial egg, or none) with its time.
 """
 
 import argparse
@@ -25,6 +27,7 @@ from robot.vision.config_vision import RELEASE_TARGET_CX, RELEASE_TARGET_CY, REL
 from robot.vision.egg_detector import Candidate, detect_eggs, inspect_candidates
 from robot.vision.egg_size import EggDetection, classify_size
 from robot.vision.frames import rgb_to_bgr
+from robot.vision.wrist_check import egg_in_wrist_view
 
 OK_BGR = (90, 200, 90)
 OUT_BGR = (40, 120, 220)
@@ -42,7 +45,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="list every candidate component with its measurements and rejection reason")
     parser.add_argument("--basket", action="store_true",
                         help="also detect the pink basket (Auto Release) and draw it with the release target")
+    parser.add_argument("--wrist", action="store_true",
+                        help="also run the Auto Catch wrist-view check (a wrist capture at the catch pose)")
     return parser.parse_args(argv)
+
+
+def describe_wrist(frame: Any) -> str:
+    """One line for the wrist-view check: the egg (full or partial) or none, with the time."""
+    started = time.perf_counter()
+    view = egg_in_wrist_view(frame)
+    elapsed_ms = 1000.0 * (time.perf_counter() - started)
+    if view is None:
+        return f"wrist: no egg  ({elapsed_ms:.1f} ms)"
+    kind = "partial" if view.partial else "full"
+    return f"wrist: {view.color} egg ({kind})  cx={view.cx:.3f} cy={view.cy:.3f}  ({elapsed_ms:.1f} ms)"
 
 
 def output_path(image: Path) -> Path:
@@ -71,7 +87,8 @@ def describe_candidate(candidate: Candidate) -> str:
     return (f"  cluster: {candidate.cluster_spots} spot(s) d_med={candidate.d_med:.1f} window={candidate.window}  "
             f"bbox=({candidate.x},{candidate.y},{candidate.w},{candidate.h}) area={candidate.area_px} "
             f"aspect={candidate.aspect:.2f} scale={candidate.scale:.2f} solidity={solidity} fill={fill} "
-            f"border={'yes' if candidate.touches_border else 'no'} spots[{spots}]  {verdict}")
+            f"border={'yes' if candidate.touches_border else 'no'} spots[{spots}]  {verdict}"
+            + "".join(f"\n    component {stage}: {box}" for stage, box in candidate.stages))
 
 
 def describe_basket(det: BasketDetection | None, elapsed_ms: float) -> str:
@@ -143,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     for index, det in enumerate(detections, start=1):
         print(describe(index, det))
     if args.debug:
-        candidates = inspect_candidates(frame)
+        candidates = inspect_candidates(frame, trace=True)
         print(f"{len(candidates)} spot cluster(s):")
         for candidate in candidates:
             print(describe_candidate(candidate))
@@ -152,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
         basket, elapsed_ms = time_basket(frame)
         print(describe_basket(basket, elapsed_ms))
         annotated = annotate_basket(annotated, basket)
+    if args.wrist:
+        print(describe_wrist(frame))
     target = output_path(args.image)
     if not cv2.imwrite(str(target), annotated):
         print(f"Cannot write {target}", file=sys.stderr)

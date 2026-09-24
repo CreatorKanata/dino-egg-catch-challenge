@@ -27,6 +27,9 @@ from robot.vision.config_vision import (
     EGG_CORE_SPOT_FACTOR,
     EGG_EDGE_SPOT_MIN_FILL,
     EGG_ELLIPSE_FILL_RANGE,
+    EGG_FENCE_CANNY,
+    EGG_FENCE_DILATE_PX,
+    EGG_HULL_CAP_FACTOR,
     EGG_MIN_AREA_PX,
     EGG_MIN_SOLIDITY,
     EGG_MIN_SPOT_AREA_PX,
@@ -73,6 +76,9 @@ class DetectorParams:
     window_factor: float = EGG_WINDOW_FACTOR
     close_kernel_px: int = EGG_CLOSE_KERNEL_PX
     open_spot_factor: float = EGG_OPEN_SPOT_FACTOR
+    fence_canny: tuple[int, int] = EGG_FENCE_CANNY
+    fence_dilate_px: int = EGG_FENCE_DILATE_PX
+    hull_cap_factor: float = EGG_HULL_CAP_FACTOR
     spot_blob_max_factor: float = EGG_SPOT_BLOB_MAX_FACTOR
     spot_blob_min_extent: float = EGG_SPOT_BLOB_MIN_EXTENT
     repair_kernel_fraction: float = EGG_REPAIR_KERNEL_FRACTION
