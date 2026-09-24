@@ -74,7 +74,10 @@ The first detector version is a local color-based detector (HSV thresholds per e
 
 - Outbound: Gemini ER 2 on the overhead image selects the target; the base drives toward it until the egg appears in the front camera; from there Auto Catch's alignment and catch take over. The overhead camera therefore only has to get the robot close, which relaxes its calibration.
 - Return: the robot turns until the pink basket is in the front camera, drives until it reaches the Auto Release size, and runs Auto Release.
-- Voice: `Hi!` toggles listening (push-to-talk by toggle) so the noisy venue does not trigger false input. Confirmation of the highlighted egg is by voice; a keyboard fallback for staff is kept.
+- Voice (owner decision, 2026-09-24): `Hi!` toggles listening (push-to-talk by toggle) so the noisy venue does not trigger false input. The same rule applies to the answer to "is this the egg?": the attendee presses `Hi!` to start listening, answers by voice, and presses `Hi!` again to end. Listening never starts by itself. The signboard shows a clear status for each step: "Listening...", "Thinking...", "Is this the egg?" with the rectangle, "Confirmed", and "Driving to the egg" and so on, so nobody wonders whether the robot is waiting for them. A keyboard fallback for staff is kept.
+- Target identity: the egg the attendee confirmed on the overhead image must be the egg the front camera aligns to. The overhead tracker's target ID is checked against the front-camera detection before Auto Catch's alignment starts; when the match is uncertain (for example two eggs of the same color close together), FSC asks again instead of guessing.
+- Return fallback: if the pink basket cannot be found from the front camera (occluded by people), the robot uses the overhead position estimate to drive near the basket and then searches again.
+- To verify on the robot before FSC work: the front camera's view with the neck folded and an egg held (the head must not block it), and the speech stack (speech-to-text, Gemini ER 2 model, text-to-speech) is chosen in Phase 4 planning.
 
 ## 6. Implementation order
 
@@ -89,4 +92,4 @@ The first detector version is a local color-based detector (HSV thresholds per e
 
 - Home pose values and the release motion: recorded on the robot in Phase 2.
 - Engagement speed and tolerance: tuned on the robot in Phase 1.
-- Speech device and TTS for FSC progress.
+- Speech device, speech-to-text engine, and TTS for FSC progress (Phase 4).
