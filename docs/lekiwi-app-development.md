@@ -89,10 +89,11 @@ Do not send the overhead camera through `LeKiwiClientConfig.cameras`. That field
 
 ## 5. Application layout (implemented, unit-tested without hardware)
 
-Following the working agreements (single-purpose modules, 300-line limit, tunables in `config.py`, hardware-independent tests). The operating modes (Manual Mode, Auto Catch, Auto Release, Full Self-Catching (FSC)) and the KachiButton controls are specified in [spec/operating-modes.md](spec/operating-modes.md). Phase 1 is implemented: Manual Mode (base driving with the dino-controller plus leader-arm puppeteering with slow engagement), the mode manager, KachiButton phrase detection through the signboard, and the mode text on the signboard. Phase 2 step 1 (unit-tested only, not yet run on the robot): `Hi!` in Manual Mode checks the front-camera egg detection (precondition alerts) and aligns the base to the best egg position; the catch itself, Auto Release, and FSC are still display-only stubs. Details, run commands, the KachiButton table, and the input mapping are in [src/robot/README.md](../src/robot/README.md).
+Following the working agreements (single-purpose modules, 300-line limit, tunables in `config.py`, hardware-independent tests). The operating modes (Manual Mode, Auto Catch, Auto Release, Full Self-Catching (FSC)) and the KachiButton controls are specified in [spec/operating-modes.md](spec/operating-modes.md). Phase 1 is implemented: Manual Mode (base driving with the dino-controller plus leader-arm puppeteering with slow engagement), the mode manager, KachiButton phrase detection through the signboard, and the mode text on the signboard. Phase 2 step 1 (unit-tested only, not yet run on the robot): `Hi!` in Manual Mode checks the front-camera egg detection (precondition alerts) and aligns the base to the best egg position; `Thx` runs Auto Release (basket precondition, base alignment to the basket, home pose with the egg held, recorded release motion played slowly; unit-tested only, the home pose and motion are recorded by staff into `data/arm/`); the catch itself and FSC are still display-only stubs. Details, run commands, the KachiButton table, and the input mapping are in [src/robot/README.md](../src/robot/README.md).
 
 ```
 pyproject.toml               # LeRobot fork [lekiwi,viz] + pyserial + pygame-ce; uv package = false
+data/arm/                    # Auto Release data recorded on the robot (staff keys b / r): home_pose.json, release_motion.json
 src/robot/
   config.py                  # Pi address, ZMQ ports, serial ports, leader arm, KachiButton phrases, speed levels, roles
   dino_controller_reader.py  # serial JSON v0 lines -> immutable ControllerState (stdlib + lazy pyserial)
@@ -100,13 +101,18 @@ src/robot/
   drive_state.py             # frozen DriveState and the stop/drive decision; pure
   kachi_phrases.py           # typed text -> KachiButton commands (exact phrases, 1 s gap); pure
   mode_manager.py            # frozen AppState and the Stop / mode toggle / Hi! / Thx rules, Auto Catch start/finish; pure
-  align.py                   # Auto Catch base alignment: tapered speed, smoothing, rate limit; pure
-  arm_follow.py              # slow engagement toward the leader pose, then following; pure
+  align.py                   # base alignment (egg: cx + height; basket: cx + width): tapered speed, smoothing, rate limit; pure
+  arm_follow.py              # slow engagement toward the leader pose, then following; approach_pose / within; pure
+  auto_release.py            # Auto Release state machine: align, home (gripper kept), play, return home; pure
+  arm_motions.py             # home pose / release motion files: validate, resample, time-scale, atomic write (stdlib)
+  arm_store.py               # staff keys b (save home) and r (record release); loads the files at Thx (stdlib)
   manual_mode.py             # per-frame composition: commands, alignment, base action, arm pose, arm status; pure
   display_status.py          # frozen DisplayStatus and overlays (target guide, egg) sent to the signboard; pure
   vision/
     egg_size.py              # EggDetection record and the size precondition; pure
-    config_vision.py         # egg detector tunables (HSV ranges, spot clustering, shape rules)
+    basket_size.py           # BasketDetection record and the Auto Release size precondition; pure
+    basket_detector.py       # pink basket: loose HSV, half-size open/close, largest component (lazy OpenCV)
+    config_vision.py         # egg and basket detector tunables, Auto Release basket target and tolerances
     egg_masks.py             # color masks, spot blobs, spot clusters (numpy + cv2 passed in)
     spot_edges.py            # default spot stage: EdgeDrawing + white ring (OpenCV contrib)
     egg_detector.py          # spot-anchored, scale-adaptive egg segmentation + shape rules (lazy OpenCV)
@@ -115,7 +121,7 @@ src/robot/
     timing.py                # one-time detector timing log; pure
     align_trace.py           # per-frame alignment CSV trace in captures/ (stdlib)
     capture.py               # `c` key: save raw frames + detections to captures/ (lazy OpenCV)
-    inspect.py               # offline CLI: python -m robot.vision.inspect <image.png> [--rgb] [--debug]
+    inspect.py               # offline CLI: python -m robot.vision.inspect <image.png> [--rgb] [--debug] [--basket]
   leader_arm.py              # SO100Leader wrapper: read_pose() -> six arm_* keys or None (lazy LeRobot)
   top_camera.py              # OpenCVCamera wrapper for the overhead view (1280x720, 16:9: full field of view)
   lekiwi_adapter.py          # LeKiwiClient wrapper: connect + capture arm pose, observe, send base + arm pose, stop
@@ -139,13 +145,19 @@ tests/robot/
   test_detect_timing.py
   test_arm_follow.py
   test_manual_mode.py
+  test_auto_release.py
+  test_mode_manager_release.py
+  test_arm_motions.py
+  test_arm_store.py
+  test_basket_size.py
   test_leader_arm.py
   test_lekiwi_adapter.py
   test_signboard_layout.py
   test_signboard.py
   test_drive_loop.py
   test_drive_loop_auto_catch.py
-  loop_fakes.py              # fake devices shared by the two loop tests
+  test_drive_loop_release.py
+  loop_fakes.py              # fake devices shared by the loop tests
   test_signboard_protocol.py
   test_signboard_client.py
   test_vision_suite.py       # runs tests/robot/vision (OpenCV) in its own interpreter
@@ -153,6 +165,7 @@ tests/robot/
     test_egg_detector.py
     test_capture_inspect.py
     test_top_frame.py
+    test_basket_detector.py
 ```
 
 The dino-controller protocol is specified in [dino-controller-protocol.md](dino-controller-protocol.md). The reader buffers to LF, tolerates ESP32 boot text, requires a combined `state` snapshot before applying input, replaces the cached joystick state on every `joystick` or `state` message, and drops held inputs after `ready`, `error`, or a sequence gap. Held directions are not repeated, so the action mapper works from the latest cached state at loop rate rather than from events. Because unchanged inputs produce no traffic, the reader sends `STATE` every 0.2 s so that a 0.5 s silence reliably means input loss.

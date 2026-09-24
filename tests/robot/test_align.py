@@ -4,7 +4,8 @@ align.py is pure and stdlib-only, so the sign conventions (egg right of target -
 -y; egg smaller than target -> forward, +x), the linear speed taper (half error -> half speed,
 beyond the full-speed error -> max), zero inside a tolerance and no stall just outside it, the
 min-speed deadband, EMA smoothing, the per-frame rate limit, the done / lost / timeout paths,
-and the trace row are verified directly with duck-typed eggs.
+and the trace row are verified directly with duck-typed eggs. The Auto Release basket target
+(bbox width as the size measure, its own tolerances) reuses the same controller.
 """
 
 from dataclasses import dataclass, replace
@@ -213,6 +214,42 @@ class StepResultTests(unittest.TestCase):
         state = start_align(0.0)
         align_step(state, ON_TARGET, 0.1, TARGET, GAINS)
         self.assertEqual(state, start_align(0.0))
+
+
+@dataclass(frozen=True)
+class Basket:
+    cx: float
+    w: float
+    h: float = 0.99  # must be ignored: the basket path reads the width
+
+
+class BasketTargetTests(unittest.TestCase):
+    def test_width_is_the_size_measure(self):
+        from robot.auto_release import RELEASE_GAINS, RELEASE_TARGET
+
+        cases = ((Basket(RELEASE_TARGET.cx, RELEASE_TARGET.h - 0.2), "x.vel", +1),  # narrower -> forward
+                 (Basket(RELEASE_TARGET.cx, RELEASE_TARGET.h + 0.15), "x.vel", -1),  # wider -> backward
+                 (Basket(RELEASE_TARGET.cx + 0.2, RELEASE_TARGET.h), "y.vel", -1))  # right -> move right
+        for basket, axis, sign in cases:
+            with self.subTest(basket=basket):
+                base, done = align_command(basket, RELEASE_TARGET, RELEASE_GAINS)
+                self.assertEqual((base[axis] > 0, done), (sign > 0, False))
+                self.assertNotEqual(base[axis], 0.0)
+
+    def test_asymmetric_width_window_and_done(self):
+        from robot.auto_release import RELEASE_GAINS, RELEASE_TARGET
+
+        target_w = RELEASE_TARGET.h  # tolerances: 0.04 narrower (farther), 0.10 wider (closer)
+        for delta, done in ((-0.05, False), (-0.03, True), (0.09, True), (0.11, False)):
+            with self.subTest(delta=delta):
+                self.assertEqual(align_command(Basket(0.53, target_w + delta), RELEASE_TARGET, RELEASE_GAINS)[1], done)
+        state = start_align(0.0)
+        for frame in range(config.ALIGN_DONE_FRAMES):
+            state, _, result = align_step(state, Basket(0.53, target_w), FRAME * frame, RELEASE_TARGET, RELEASE_GAINS)
+        self.assertEqual(result, "done")
+
+    def test_smooth_reads_the_named_size(self):
+        self.assertEqual(smooth(None, Basket(0.5, 0.8), 0.5, "w"), Measurement(0.5, 0.8))
 
 
 if __name__ == "__main__":

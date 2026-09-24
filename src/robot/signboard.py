@@ -3,10 +3,12 @@
 Shows the overhead camera large, the Pi front and wrist cameras stacked on the right, and a
 status bar (mode, notice or drive status, arm status, speed footprints, held directions). On the
 front view it draws the overlays: the Auto Catch target as an egg-shaped outline with "place the
-egg here", and the detected egg (green outline when usable, accent color otherwise). The window
-keeps keyboard focus so KachiButton phrases arrive as text input; pump() returns that text, the
-capture key (`c`, KEYDOWN), and whether ESC or the window close button ended Manual Mode. Layout
-and text live in signboard_layout.py; this module only draws and never blocks.
+egg here", the detected egg (green outline when usable, accent color otherwise), the pink basket
+(a labelled rectangle), and the Auto Release basket target (thin rectangle, only while it runs).
+The window keeps keyboard focus so KachiButton phrases arrive as text input; pump() returns that
+text, the staff keys (KEYDOWN: capture `c`, save home pose `b`, record release `r`), and whether
+ESC or the window close button ended Manual Mode. Layout and text live in signboard_layout.py;
+this module only draws and never blocks.
 """
 
 from collections.abc import Mapping
@@ -23,6 +25,8 @@ import pygame  # noqa: E402
 from robot.config import (
     CAPTURE_KEY,
     DEFAULT_THEME,
+    HOME_KEY,
+    RECORD_KEY,
     SIGNBOARD_FONT_SIZE,
     SIGNBOARD_FRAME_WIDTH,
     SIGNBOARD_FULLSCREEN,
@@ -38,7 +42,7 @@ from robot.config import (
     SignboardTheme,
 )
 from robot.dino_controller_reader import ControllerState
-from robot.display_status import DisplayStatus, Overlay
+from robot.display_status import RECT_KINDS, DisplayStatus, Overlay
 from robot.drive_state import DriveState
 from robot.signboard_layout import (
     ASCII_GLYPHS,
@@ -47,6 +51,7 @@ from robot.signboard_layout import (
     Rect,
     compute_layout,
     overlay_points,
+    overlay_rect,
     status_color,
     status_lines,
 )
@@ -57,16 +62,19 @@ logger = logging.getLogger(__name__)
 MISSING_GLYPH_PROBE = ""
 LABEL_PADDING = 6
 OVERLAY_LINE_PX = 3
+THIN_LINE_PX = 1  # the Auto Release basket target
 
 
 @dataclass(frozen=True)
 class PumpResult:
     """Outcome of one event pump: False after ESC or window close, text typed meanwhile, and
-    whether the capture key was pressed."""
+    whether the capture, save-home, and record keys were pressed."""
 
     keep_running: bool
     typed: str = ""
     capture: bool = False
+    save_home: bool = False
+    toggle_record: bool = False
 
 
 def _to_pygame_rect(rect: Rect) -> pygame.Rect:
@@ -87,8 +95,8 @@ def _is_exit(event: Any) -> bool:
     return event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)
 
 
-def _is_capture(event: Any) -> bool:
-    return event.type == pygame.KEYDOWN and event.key == pygame.key.key_code(CAPTURE_KEY)
+def _is_key(event: Any, key: str) -> bool:
+    return event.type == pygame.KEYDOWN and event.key == pygame.key.key_code(key)
 
 
 class SignboardView:
@@ -150,7 +158,9 @@ class SignboardView:
         events = pygame.event.get()
         typed = "".join(event.text for event in events if event.type == pygame.TEXTINPUT)
         return PumpResult(keep_running=not any(_is_exit(event) for event in events), typed=typed,
-                          capture=any(_is_capture(event) for event in events))
+                          capture=any(_is_key(event, CAPTURE_KEY) for event in events),
+                          save_home=any(_is_key(event, HOME_KEY) for event in events),
+                          toggle_record=any(_is_key(event, RECORD_KEY) for event in events))
 
     def close(self) -> None:
         if self._screen is None:
@@ -179,13 +189,19 @@ class SignboardView:
 
     def _draw_overlay(self, screen: Any, overlay: Overlay, fit_rect: Rect) -> None:
         """Egg-shaped outline (the target's inscribed ellipse or the egg's fitted, possibly rotated
-        ellipse); the target's label goes just below it and a detection's label just above, so
-        the two do not overlap once the egg is aligned."""
-        colors = {"target": self._theme.text, "egg_ok": self._theme.ok, "egg_out": self._theme.accent}
-        points = overlay_points(overlay, fit_rect)
-        pygame.draw.polygon(screen, colors[overlay.kind], points, OVERLAY_LINE_PX)
-        xs, ys = [x for x, _ in points], [y for _, y in points]
-        box = pygame.Rect(min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1)
+        ellipse) or, for the basket and its target, a rectangle; the target's label goes just below
+        it and a detection's label just above, so the two do not overlap once the egg is aligned."""
+        colors = {"target": self._theme.text, "egg_ok": self._theme.ok, "egg_out": self._theme.accent,
+                  "basket": self._theme.basket, "release_target": self._theme.text}
+        if overlay.kind in RECT_KINDS:
+            box = _to_pygame_rect(overlay_rect(overlay, fit_rect))
+            width = THIN_LINE_PX if overlay.kind == "release_target" else OVERLAY_LINE_PX
+            pygame.draw.rect(screen, colors[overlay.kind], box, width)
+        else:
+            points = overlay_points(overlay, fit_rect)
+            pygame.draw.polygon(screen, colors[overlay.kind], points, OVERLAY_LINE_PX)
+            xs, ys = [x for x, _ in points], [y for _, y in points]
+            box = pygame.Rect(min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1)
         if not overlay.label:
             return
         label = self._small_font.render(overlay.label, True, colors[overlay.kind])

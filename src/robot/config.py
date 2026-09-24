@@ -1,4 +1,4 @@
-"""src/robot/config.py: Central runtime tunables for Manual Mode and Auto Catch alignment.
+"""src/robot/config.py: Central runtime tunables for Manual Mode, Auto Catch, and Auto Release.
 
 Every address, port, rate, speed level, and input-role choice used by src/robot lives here,
 as required by AGENTS.md. Values come from docs/lekiwi-app-development.md and the
@@ -6,6 +6,7 @@ dino-controller docs; nothing here is a newly invented hardware limit.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final, Literal
 
 
@@ -156,6 +157,7 @@ class SignboardTheme:
     accent: tuple[int, int, int]
     warning: tuple[int, int, int]
     ok: tuple[int, int, int]
+    basket: tuple[int, int, int]
 
 
 # Placeholder Jurassic palette; artwork (wood-sign frames, fonts, footprint icons) comes later
@@ -167,6 +169,7 @@ DEFAULT_THEME: Final = SignboardTheme(
     accent=(220, 120, 40),  # Catch
     warning=(200, 60, 50),  # input lost, rejected Auto Catch
     ok=(90, 200, 90),  # egg at a usable size
+    basket=(235, 110, 185),  # pink basket outline (Auto Release)
 )
 SIGNBOARD_SIZE: Final = (1280, 720)
 SIGNBOARD_FULLSCREEN: Final = False
@@ -230,6 +233,23 @@ CAPTURE_DIR: Final = "captures"
 CAPTURE_KEY: Final = "c"
 CAPTURE_COMMAND: Final = "capture"  # signboard -> parent command line for the capture key
 
+# --- Auto Release (Phase 2): home pose, recorded release motion, staff keys ------------------
+# Basket detector, basket alignment target, and tolerances: robot/vision/config_vision.py.
+# Data files (JSON recorded on the robot with the keys below), relative to the repository root.
+REPO_ROOT: Final = Path(__file__).resolve().parents[2]
+HOME_POSE_PATH: Final = "data/arm/home_pose.json"
+RELEASE_MOTION_PATH: Final = "data/arm/release_motion.json"
+# Staff keys (KEYDOWN in the signboard, like CAPTURE_KEY). Not "h": the KachiButton types the "h"
+# of "Thx" and "Hi!" as key presses too, so every Thx/Hi! would overwrite the home pose.
+HOME_KEY: Final = "b"  # save the commanded arm pose as the home (base) pose
+RECORD_KEY: Final = "r"  # start / stop recording the release motion
+SAVE_HOME_COMMAND: Final = "save_home"
+TOGGLE_RECORD_COMMAND: Final = "toggle_record"
+RELEASE_HOME_TIMEOUT_S: Final = 8.0  # arm approach to the home pose (and the motion's start)
+RELEASE_PLAYBACK_SPEED: Final = 0.5  # 1.0 = recorded speed; the first physical test runs at 0.5
+RELEASE_MAX_JOINT_STEP_DEG_PER_S: Final = 90.0  # playback: per-frame change cap on every joint
+RECORD_MAX_S: Final = 30.0  # a release recording stops and saves itself at this length
+
 if type(ENCODER_CLICKS_PER_REVOLUTION) is not int or ENCODER_CLICKS_PER_REVOLUTION <= 0:
     raise ValueError("ENCODER_CLICKS_PER_REVOLUTION must be a positive int")
 if not ENCODER_ROTATION_SCALE > 0:
@@ -264,5 +284,11 @@ if any(ALIGN_MAX_XY * min(1.0, tol / full) < ALIGN_MIN_XY - 1e-9 for tol, full i
     raise ValueError("Need ALIGN_MAX_XY * min(1, tolerance / full-speed error) >= ALIGN_MIN_XY at every edge")
 if min(ALIGN_DONE_FRAMES, ALIGN_LOST_FRAMES, DETECT_TIMING_FRAMES) < 1 or not ALIGN_TIMEOUT_S > 0:
     raise ValueError("Alignment frame counts must be >= 1 and ALIGN_TIMEOUT_S positive")
-if len(CAPTURE_KEY) != 1 or any(CAPTURE_KEY.lower() in phrase.lower() for phrase, _ in KACHI_PHRASES):
-    raise ValueError("CAPTURE_KEY must be one character that no KachiButton phrase contains")
+_STAFF_KEYS = (CAPTURE_KEY, HOME_KEY, RECORD_KEY)
+if len({key.lower() for key in _STAFF_KEYS}) != len(_STAFF_KEYS) or any(
+        len(key) != 1 or any(key.lower() in phrase.lower() for phrase, _ in KACHI_PHRASES) for key in _STAFF_KEYS):
+    raise ValueError("CAPTURE_KEY, HOME_KEY, RECORD_KEY: distinct single characters no KachiButton phrase contains")
+if not 0 < RELEASE_PLAYBACK_SPEED <= 2:
+    raise ValueError("RELEASE_PLAYBACK_SPEED must be in (0, 2]")
+if not (RELEASE_HOME_TIMEOUT_S > 0 and RELEASE_MAX_JOINT_STEP_DEG_PER_S > 0 and RECORD_MAX_S > 0):
+    raise ValueError("RELEASE_HOME_TIMEOUT_S, RELEASE_MAX_JOINT_STEP_DEG_PER_S, RECORD_MAX_S must be positive")

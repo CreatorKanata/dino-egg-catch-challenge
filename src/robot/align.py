@@ -1,4 +1,4 @@
-"""src/robot/align.py: Image-based base alignment for Auto Catch (Phase 2, step 1).
+"""src/robot/align.py: Image-based base alignment for Auto Catch and Auto Release (Phase 2).
 
 Drives the base until the egg's bbox in the front image sits at the best position (ALIGN_TARGET_*
 in config.py; docs/spec/operating-modes.md, section 4). LeKiwiClient's sign convention (forward =
@@ -10,7 +10,9 @@ tiny commands become 0, cx and h are smoothed with an exponential moving average
 command changes by at most max_accel * dt per frame. While the egg
 flickers out of detection (fewer than lost_frames consecutive misses) the controller keeps steering
 toward the last smoothed position (robot run 2026-09-24: far eggs flicker). Terminal results
-return zeros at once. Pure and stdlib-only: detections are duck-typed (cx, h).
+return zeros at once. The size measure is selectable (AlignTarget.size_attr): the egg uses its bbox
+height, the Auto Release basket its bbox width (the same controller, other target and tolerances).
+Pure and stdlib-only: detections are duck-typed (cx and the size attribute).
 """
 
 from dataclasses import dataclass, replace
@@ -41,7 +43,8 @@ MAX_FRAME_DT_S = 2 / LOOP_HZ  # same clamp as the rotation budget and the arm ap
 
 
 class EggLike(Protocol):
-    """The two detection fields the controller uses (normalized bbox center x and height)."""
+    """The detection fields the egg path uses (normalized bbox center x and height); the basket
+    path reads `w` instead of `h` (AlignTarget.size_attr)."""
 
     cx: float
     h: float
@@ -49,11 +52,13 @@ class EggLike(Protocol):
 
 @dataclass(frozen=True)
 class AlignTarget:
-    """Best egg position in the front image, normalized: bbox center and bbox height."""
+    """Best position in the front image, normalized: bbox center and the target value `h` of the
+    size measure named by `size_attr` (the egg's bbox height by default; "w" for the basket)."""
 
     cx: float = ALIGN_TARGET_CX
     cy: float = ALIGN_TARGET_CY
     h: float = ALIGN_TARGET_H
+    size_attr: Literal["h", "w"] = "h"
 
 
 @dataclass(frozen=True)
@@ -76,7 +81,7 @@ class AlignGains:
 
 @dataclass(frozen=True)
 class Measurement:
-    """Smoothed egg position (normalized cx and h)."""
+    """Smoothed position: normalized cx and `h`, the size measure (egg bbox height or basket width)."""
 
     cx: float
     h: float
@@ -110,15 +115,18 @@ def start_align(now: float) -> AlignState:
     return AlignState(phase="aligning", started_at=now, updated_at=now)
 
 
-def smooth(previous: Measurement | None, det: EggLike | None, weight: float = ALIGN_SMOOTHING) -> Measurement | None:
-    """EMA of cx and h with `weight` on the new sample; the first sample is taken as is and a
-    missing detection leaves the average unchanged."""
+def smooth(
+    previous: Measurement | None, det: EggLike | None, weight: float = ALIGN_SMOOTHING, size_attr: str = "h"
+) -> Measurement | None:
+    """EMA of cx and the size measure (attribute `size_attr`) with `weight` on the new sample; the
+    first sample is taken as is and a missing detection leaves the average unchanged."""
     if det is None:
         return previous
+    size = float(getattr(det, size_attr))
     if previous is None:
-        return Measurement(cx=det.cx, h=det.h)
+        return Measurement(cx=det.cx, h=size)
     return Measurement(cx=weight * det.cx + (1 - weight) * previous.cx,
-                       h=weight * det.h + (1 - weight) * previous.h)
+                       h=weight * size + (1 - weight) * previous.h)
 
 
 def _taper(error: float, tol_below: float, tol_above: float, full_speed_error: float, gains: AlignGains) -> float:
@@ -133,14 +141,17 @@ def _taper(error: float, tol_below: float, tol_above: float, full_speed_error: f
 def align_command(
     det: EggLike | None, target: AlignTarget = DEFAULT_TARGET, gains: AlignGains = DEFAULT_GAINS
 ) -> tuple[dict[str, float], bool]:
-    """Target base velocities for an egg position and whether it is inside both tolerances.
+    """Target base velocities for a position and whether it is inside both tolerances.
 
-    Without a detection the target is zero and the egg is not aligned.
+    `det` is a detection or a Measurement; a Measurement's `h` already is the size measure, a
+    detection's size is read from target.size_attr. Without a detection the target is zero and
+    nothing is aligned.
     """
     if det is None:
         return zero_base(), False
+    size = det.h if isinstance(det, Measurement) else float(getattr(det, target.size_attr))
     error_cx = det.cx - target.cx
-    error_h = target.h - det.h  # > 0: egg smaller (farther) than the target -> forward
+    error_h = target.h - size  # > 0: smaller (farther) than the target -> forward
     base = {
         "x.vel": _taper(error_h, gains.tol_h_near, gains.tol_h_far, gains.full_speed_error_h, gains),
         "y.vel": _taper(-error_cx, gains.tol_cx, gains.tol_cx, gains.full_speed_error_cx, gains),
@@ -175,7 +186,7 @@ def align_step(
     lost = state.lost_frames + 1 if det is None else 0
     if lost >= gains.lost_frames:
         return AlignState(), zero_base(), "lost"
-    smoothed = smooth(state.smoothed, det, gains.smoothing)
+    smoothed = smooth(state.smoothed, det, gains.smoothing, target.size_attr)
     wanted, done = align_command(smoothed, target, gains)
     if det is None:
         ok_frames = state.ok_frames  # a flicker neither advances nor resets the progress

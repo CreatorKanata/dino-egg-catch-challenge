@@ -86,6 +86,18 @@ class FrontOverlayTests(unittest.TestCase):
         self.assertEqual([overlay.kind for overlay in front_overlays(AppState(), None)], ["target"])
         self.assertEqual(front_overlays(AppState(mode="fsc"), None), ())
 
+    def test_basket_always_and_release_target_only_while_releasing(self):
+        from robot.mode_manager import AppState
+        from robot.vision.basket_size import BasketDetection
+
+        basket = BasketDetection(0.52, 0.42, 0.78, 0.68, 0.33, 0.6)
+        kinds = [overlay.kind for overlay in front_overlays(AppState(), None, basket)]
+        self.assertEqual(kinds, ["target", "basket"])
+        overlays = front_overlays(AppState(action="auto_release"), None, basket)
+        self.assertEqual([overlay.kind for overlay in overlays], ["target", "release_target", "basket"])
+        self.assertEqual((overlays[2].cx, overlays[2].w, overlays[2].label), (0.52, 0.78, "basket"))
+        self.assertEqual(front_overlays(AppState(mode="fsc"), None, basket), ())
+
     def test_egg_uses_its_fitted_ellipse_else_its_bbox(self):
         from robot.mode_manager import AppState
 
@@ -209,6 +221,17 @@ class StatusTextTests(unittest.TestCase):
         stopped = DisplayStatus(mode="fsc", notice="STOP", stopped=True)
         lines = status_lines(replace(DRIVING, input_lost=True), SYNCED, 3, status=stopped)
         self.assertEqual(lines[:2], ("STOPPED", "Press Go Go! to resume"))
+
+    def test_auto_release_progress_recording_and_arm_text(self):
+        releasing = DisplayStatus(action="auto_release", arm_status="auto release", progress=0.456)
+        lines = status_lines(DRIVING, SYNCED, 3, ASCII_GLYPHS, releasing)
+        self.assertEqual(lines[0], "MANUAL - AUTO RELEASE 46%")
+        self.assertTrue(lines[2].startswith("arm auto release  |  "))
+        recording = DisplayStatus(arm_status="following", recording_s=4.7)
+        self.assertEqual(status_lines(DRIVING, SYNCED, 3, status=recording)[1], "REC release 4 s")
+        self.assertEqual(status_color(DRIVING, DEFAULT_THEME, recording), DEFAULT_THEME.warning)
+        noticed = replace(recording, notice="Recording release...")
+        self.assertEqual(status_lines(DRIVING, SYNCED, 3, status=noticed)[1], "Recording release...")
 
     def test_fsc_second_line_is_the_voice_hint(self):
         lost = replace(DRIVING, input_lost=True)  # the controller is not used in FSC

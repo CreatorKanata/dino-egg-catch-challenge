@@ -1,11 +1,12 @@
 """src/robot/drive_loop.py: One Manual Mode control-loop iteration and the fixed-rate loop.
 
 Polls the controller and the KachiButton commands, reads the leader arm, decides the base
-action and arm pose (manual_mode.py, including a running Auto Catch alignment), sends them,
+action and arm pose (manual_mode.py, including a running Auto Catch alignment or Auto Release),
+sends them, applies the staff keys (save home pose, record the release motion; arm_store.py),
 then observes: the Pi frames are converted to BGR, the 16:9 overhead frame is downscaled once,
-the egg detector runs on the front frame in Manual Mode (its result drives the next frame's
-`Hi!` check and alignment), a `capture` command saves the frames (without overlays), and the
-operator (Rerun) and attendee (signboard) views are updated.
+the egg and basket detectors run on the front frame in Manual Mode (their results drive the next
+frame's `Hi!` / `Thx` checks and alignments), a `capture` command saves the frames (without
+overlays), and the operator (Rerun) and attendee (signboard) views are updated.
 Extracted from teleop_drive.py so the entry point only handles setup and shutdown. The loop
 ends when the display reports ESC, window close, or a dead signboard process; `Stop` does not
 end it. This module must not import pygame (robot.signboard); cv2 is only loaded lazily (by the
@@ -30,12 +31,22 @@ from robot.config import (
     TOP_CAMERA_KEY,
 )
 from robot.dino_controller_reader import ControllerState, SerialControllerReader
-from robot.arm_follow import disengaged
+from robot.arm_follow import ArmFollowState, disengaged
+from robot.arm_store import (
+    DEFAULT_PATHS,
+    ArmDataPaths,
+    handle_staff_keys,
+    load_release_request,
+    recording_seconds,
+    wants_release,
+)
+from robot.auto_release import ReleaseRequest
 from robot.display_status import DisplayStatus, display_status, front_overlays
 from robot.drive_state import DriveState, update_drive_state
 from robot.leader_arm import LeaderArm
 from robot.lekiwi_adapter import LeKiwiAdapter
 from robot.align import TraceRow
+from robot.display_status import ArmStatus
 from robot.manual_mode import (
     LoopState,
     fold_commands,
@@ -43,9 +54,13 @@ from robot.manual_mode import (
     log_changes,
     plan_arm,
     plan_base,
+    release_arm_status,
     step_auto_catch,
+    step_auto_release,
 )
-from robot.mode_manager import NOTICE_CAPTURE_FAILED, NOTICE_CAPTURED, with_notice
+from robot.mode_manager import NOTICE_CAPTURE_FAILED, NOTICE_CAPTURED, AppState, with_notice
+from robot.vision.basket_detector import detect_basket
+from robot.vision.basket_size import classify_basket
 from robot.vision.align_trace import append_row, trace_path
 from robot.vision.capture import save_capture
 from robot.vision.egg_detector import detect_eggs
@@ -84,6 +99,7 @@ class DriveDevices:
     view: DisplaySink | None
     use_rerun: bool
     leader: LeaderArm | None = None
+    arm_paths: ArmDataPaths = DEFAULT_PATHS  # home pose and release motion files
 
 
 def log_transitions(before: DriveState, after: DriveState) -> None:
@@ -116,27 +132,43 @@ def camera_frames(observation: dict[str, Any], top_frame: Any | None) -> dict[st
     return {TOP_CAMERA_KEY: top_frame, **{name: observation.get(name) for name in SIGNBOARD_SIDE_CAMERAS}}
 
 
+def _plan_arm(
+    devices: DriveDevices, app: AppState, follow: ArmFollowState, release_arm: dict[str, float] | None, dt: float
+) -> tuple[dict[str, float], ArmFollowState, ArmStatus]:
+    """Auto Release's pose when it produced one (the leader is not read); else plan_arm."""
+    if release_arm is not None:
+        return release_arm, disengaged(), release_arm_status(app)
+    has_leader = devices.leader is not None
+    leader_pose = devices.leader.read_pose() if leader_wanted(app, has_leader) else None
+    return plan_arm(devices.adapter.arm_hold, leader_pose, follow, app, has_leader, dt)
+
+
 def _next_state(
     devices: DriveDevices, state: LoopState, now: float, dt: float
 ) -> tuple[LoopState, ControllerState, dict[str, float], tuple[str, ...]]:
-    """Steps 1-5 of a frame: inputs and commands, Auto Catch, stops, leader, base, then send.
+    """Steps 1-6 of a frame: inputs and commands, Auto Catch / Auto Release, stops, leader, base,
+    send, then the staff keys (they record the pose just sent).
 
-    Returns the sent action and this frame's commands as well. The egg used here is the one
-    detected in the previous frame's front image (the newest available).
+    Returns the sent action and this frame's commands as well. The egg and basket used here are the
+    ones detected in the previous frame's front image (the newest available).
     """
     controller, encoder_delta = devices.reader.poll(now)
     stale = devices.reader.is_stale(now)
     commands = devices.view.poll_commands() if devices.view is not None else ()
-    folded = fold_commands(state.app, commands, now, classify_size(state.egg))
+    release = (load_release_request(devices.arm_paths, classify_basket(state.basket))
+               if wants_release(state.app, commands) else ReleaseRequest())
+    folded = fold_commands(state.app, commands, now, classify_size(state.egg), release)
     folded, auto_base, trace = step_auto_catch(folded, state.egg, now)
+    folded, release_base, release_arm = step_auto_release(folded, state.basket, devices.adapter.arm_hold, now)
     follow = disengaged() if folded.disengage_arm else state.follow
     drive = update_drive_state(state.drive, controller, encoder_delta, stale, dt)
-    has_leader = devices.leader is not None
-    leader_pose = devices.leader.read_pose() if leader_wanted(folded.app, has_leader) else None
-    arm_cmd, follow, arm_status = plan_arm(devices.adapter.arm_hold, leader_pose, follow, folded.app, has_leader, dt)
-    drive, base = plan_base(drive, controller, folded.app, folded.stop_base, auto_base)
+    arm_cmd, follow, arm_status = _plan_arm(devices, folded.app, follow, release_arm, dt)
+    drive, base = plan_base(drive, controller, folded.app, folded.stop_base,
+                            auto_base if release_base is None else release_base)
     devices.adapter.send_action(base, arm_cmd)
-    next_state = replace(state, drive=drive, app=folded.app, follow=follow, arm_status=arm_status,
+    app, recording = handle_staff_keys(folded.app, state.recording, commands, arm_cmd, arm_status, now,
+                                       devices.arm_paths)
+    next_state = replace(state, drive=drive, app=app, follow=follow, arm_status=arm_status, recording=recording,
                          align_trace=record_trace(state.align_trace, trace, folded.app.action == "auto_catch"))
     log_transitions(state.drive, drive)
     log_changes(state, next_state)
@@ -165,14 +197,16 @@ def record_trace(path: str | None, row: TraceRow | None, running: bool) -> str |
 
 
 def detect_front(state: LoopState, frames: Mapping[str, Any]) -> tuple[LoopState, tuple[EggDetection, ...]]:
-    """Run the egg detector on the front frame in Manual Mode; remember the best egg and time it."""
+    """Run the egg and basket detectors on the front frame in Manual Mode; remember the best egg
+    and the basket, and time the egg detector."""
     front = frames.get(FRONT_CAMERA_KEY)
     if state.app.mode != "manual" or front is None:
-        return replace(state, egg=None), ()
+        return replace(state, egg=None, basket=None), ()
     started = time.perf_counter()
     detections = detect_eggs(front)
     timing = record_detect_time(state.timing, time.perf_counter() - started)
-    return replace(state, egg=detections[0] if detections else None, timing=timing), detections
+    basket = detect_basket(front)
+    return replace(state, egg=detections[0] if detections else None, basket=basket, timing=timing), detections
 
 
 def capture(state: LoopState, frames: Mapping[str, Any], detections: tuple[EggDetection, ...], now: float) -> LoopState:
@@ -208,8 +242,9 @@ def step(devices: DriveDevices, state: LoopState, previous_time: float | None) -
         log_rerun_data(observation=logged, action={**sent, **drive_scalars(next_state)})
     if devices.view is None:
         return next_state, True, now
-    overlays = front_overlays(next_state.app, next_state.egg)
-    status = display_status(next_state.app, next_state.arm_status, overlays)
+    overlays = front_overlays(next_state.app, next_state.egg, next_state.basket)
+    status = display_status(next_state.app, next_state.arm_status, overlays,
+                            recording_seconds(next_state.recording, now))
     devices.view.render(frames, next_state.drive, controller, status)
     return next_state, devices.view.pump(), now
 

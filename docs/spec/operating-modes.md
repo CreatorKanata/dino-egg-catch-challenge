@@ -18,7 +18,7 @@ Auto Catch and Auto Release exist only as attendee-triggered actions in Manual M
 
 ### Arm home position
 
-The arm has a home position: joints folded, mouth pointing down. In this pose the dinosaur can hold an egg and be driven around without anyone touching the leader arm, which is what makes single-player Manual Mode possible. The home pose is recorded once on the robot from the signboard keyboard (`b` key, staff only) into `data/arm/home_pose.json`; it is also the base pose that Auto Release starts from. The release motion is recorded the same way (`r` key toggles recording) into `data/arm/release_motion.json`. Staff keys never use a letter that a KachiButton phrase types (so not `h`, which "Thx" and "Hi!" contain).
+The arm has a home position: joints folded with the head pointing **up** (owner decision, 2026-09-24; a downward head hit the basket during release). In this pose the dinosaur can hold an egg and be driven around without anyone touching the leader arm, which is what makes single-player Manual Mode possible. The home pose is recorded once on the robot from the signboard keyboard (`b` key, staff only) into `data/arm/home_pose.json`; it is also the base pose that Auto Release starts from. The release motion is recorded the same way (`r` key toggles recording) into `data/arm/release_motion.json`. Staff keys never use a letter that a KachiButton phrase types (so not `h`, which "Thx" and "Hi!" contain).
 
 ## 2. KachiButton controls (owner decisions, 2026-09-24)
 

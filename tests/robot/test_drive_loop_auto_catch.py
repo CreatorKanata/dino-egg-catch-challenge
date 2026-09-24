@@ -43,6 +43,9 @@ class AutoCatchLoopTests(unittest.TestCase):
         patcher = mock.patch.object(drive_loop, "detect_eggs", return_value=(FAR_RIGHT,))
         self.detector = patcher.start()
         self.addCleanup(patcher.stop)
+        basket = mock.patch.object(drive_loop, "detect_basket", return_value=None)
+        basket.start()
+        self.addCleanup(basket.stop)
         trace = mock.patch.object(drive_loop, "append_row")  # never write captures/ in tests
         self.trace = trace.start()
         self.addCleanup(trace.stop)
@@ -170,6 +173,9 @@ class CaptureLoopTests(unittest.TestCase):
         patcher = mock.patch.object(drive_loop, "detect_eggs", return_value=(FAR_RIGHT,))
         patcher.start()
         self.addCleanup(patcher.stop)
+        basket = mock.patch.object(drive_loop, "detect_basket", return_value=None)
+        basket.start()
+        self.addCleanup(basket.stop)
         self.view = FakeView(keep_running=True, commands=("capture",))
         self.parts = DriveDevices(reader=FakeReader(FORWARD), adapter=FakeAdapter(), camera=None, view=self.view,
                                   use_rerun=False)

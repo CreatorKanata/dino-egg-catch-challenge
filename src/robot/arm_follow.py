@@ -3,10 +3,12 @@
 Owner decision (docs/spec/operating-modes.md, section 3): when Manual Mode starts or after a stop,
 the dinosaur arm moves toward the leader's pose at a limited rate per key, and follows the
 leader directly only once every key is within tolerance. This removes the jump a mismatched
-leader would cause. Pure and stdlib-only; the caller passes the frame time.
+leader would cause. approach_pose and within are shared with Auto Release (home pose and
+recorded-motion playback use the same rate-limited approach). Pure and stdlib-only; the caller
+passes the frame time.
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 import math
 
@@ -33,6 +35,29 @@ def _approach(current: float, target: float, max_step: float) -> float:
     return target if abs(delta) <= max_step else current + math.copysign(max_step, delta)
 
 
+def approach_pose(
+    current: Mapping[str, float],
+    target: Mapping[str, float],
+    dt: float,
+    speed: float = ARM_ENGAGE_SPEED_DEG_S,
+    keys: Iterable[str] = ARM_KEYS,
+) -> dict[str, float]:
+    """A new pose with every key of `keys` moved from `current` toward `target` by at most
+    `speed * dt` (dt clamped to [0, 2 / LOOP_HZ]), without overshooting."""
+    max_step = speed * min(max(dt, 0.0), MAX_FRAME_DT_S)
+    return {key: _approach(float(current[key]), float(target[key]), max_step) for key in keys}
+
+
+def within(
+    current: Mapping[str, float],
+    target: Mapping[str, float],
+    tolerance: float = ARM_ENGAGE_TOLERANCE_DEG,
+    keys: Iterable[str] = ARM_KEYS,
+) -> bool:
+    """True when every key of `keys` is within `tolerance` of the target."""
+    return all(abs(float(current[key]) - float(target[key])) <= tolerance for key in keys)
+
+
 def follow_step(
     commanded: Mapping[str, float],
     leader: Mapping[str, float] | None,
@@ -53,8 +78,7 @@ def follow_step(
     target = {key: float(leader[key]) for key in ARM_KEYS}
     if state.engaged:
         return target, state
-    max_step = speed * min(max(dt, 0.0), MAX_FRAME_DT_S)
-    moved = {key: _approach(float(commanded[key]), target[key], max_step) for key in ARM_KEYS}
-    if all(abs(moved[key] - target[key]) <= tolerance for key in ARM_KEYS):
+    moved = approach_pose(commanded, target, dt, speed)
+    if within(moved, target, tolerance):
         return target, ArmFollowState(engaged=True)
     return moved, state

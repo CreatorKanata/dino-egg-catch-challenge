@@ -1,8 +1,9 @@
 """src/robot/signboard_layout.py: Pure layout and status text for the attendee signboard.
 
 Computes where the three camera views and the status bar go, where a normalized overlay lands
-inside a letterboxed camera view, and what the status bar says (mode or STOPPED; the resume
-hint, a notice, the FSC voice hint, or the drive status; arm status with speed and directions),
+inside a letterboxed camera view, and what the status bar says (mode or STOPPED, with the Auto
+Release playback progress; the resume hint, a notice, the release recording time, the FSC voice
+hint, or the drive status; arm status with speed and directions),
 using only the stdlib (own Rect, not pygame.Rect) so it is unit-tested without a display.
 signboard.py draws.
 """
@@ -23,6 +24,7 @@ ARM_TEXT = {
     "following": "arm following",
     "leader fault": "LEADER ARM FAULT",
     "no leader": "no leader arm",
+    "auto release": "arm auto release",
 }
 SEPARATOR = "  |  "
 VOICE_TEXT = "mic on"
@@ -30,6 +32,7 @@ STOPPED_TEXT = "STOPPED"
 RESUME_HINT = "Press Go Go! to resume"
 FSC_TALK_HINT = "Press Hi! to talk"
 FSC_LISTENING_HINT = "Listening... (Hi! to end)"
+RECORDING_TEXT = "REC release {seconds} s"
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,8 @@ def _mode_text(status: DisplayStatus) -> str:
     if status.stopped:
         return STOPPED_TEXT
     action = ACTION_TEXT[status.action]
+    if status.progress is not None:
+        action = f"{action} {round(100 * status.progress)}%"
     return f"{MODE_TEXT[status.mode]} - {action}" if action else MODE_TEXT[status.mode]
 
 
@@ -145,7 +150,8 @@ def _drive_text(drive: DriveState) -> str:
 
 
 def _second_line(drive: DriveState, status: DisplayStatus) -> str:
-    """Resume hint while stopped; else the notice; else the FSC voice hint or the drive status.
+    """Resume hint while stopped; else the notice; else the release recording time; else the FSC
+    voice hint or the drive status.
 
     The controller is not used in FSC, so INPUT LOST / CATCH! / DRIVE appear only in Manual Mode.
     """
@@ -153,6 +159,8 @@ def _second_line(drive: DriveState, status: DisplayStatus) -> str:
         return RESUME_HINT
     if status.notice:
         return status.notice
+    if status.recording_s is not None:
+        return RECORDING_TEXT.format(seconds=int(status.recording_s))
     if status.mode == "fsc":
         return FSC_LISTENING_HINT if status.voice_listening else FSC_TALK_HINT
     return _drive_text(drive)
@@ -199,9 +207,9 @@ def status_lines(
 def status_color(
     drive: DriveState, theme: SignboardTheme, status: DisplayStatus = DisplayStatus()
 ) -> tuple[int, int, int]:
-    """Warning while stopped, for a warning notice (rejected Auto Catch, egg lost), or (Manual
-    Mode) when input is lost; accent while Catch is requested."""
-    if status.stopped or (status.notice and status.notice_level == "warning"):
+    """Warning while stopped, for a warning notice (rejected Auto Catch, egg lost), while the release
+    motion is recorded, or (Manual Mode) when input is lost; accent while Catch is requested."""
+    if status.stopped or (status.notice and status.notice_level == "warning") or status.recording_s is not None:
         return theme.warning
     if status.mode != "manual":
         return theme.text

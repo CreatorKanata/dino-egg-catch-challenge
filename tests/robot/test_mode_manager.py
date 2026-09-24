@@ -1,9 +1,10 @@
 """tests/robot/test_mode_manager.py: Hardware-free checks of the mode manager rules.
 
 Each KachiButton command is applied to a frozen AppState; the tests pin down every rule in the
-spec (Stop and its latch, resume by Go Go!, mode toggle, the Thx stub and FSC voice toggle,
+spec (Stop and its latch, resume by Go Go!, mode toggle, Thx routing and FSC voice toggle,
 ignore-while-action, notice expiry) as recorded in docs/spec/operating-modes.md, plus the Phase 2
-Auto Catch start (egg-size precondition alerts) and its terminal results.
+Auto Catch start (egg-size precondition alerts) and its terminal results. Auto Release start and
+outcomes are in test_mode_manager_release.py.
 """
 
 from dataclasses import replace
@@ -60,9 +61,9 @@ class HiThxTests(unittest.TestCase):
         self.assertEqual(result.state, AppState())
         self.assertFalse(result.stop_base or result.disengage_arm)
 
-    def test_thx_in_manual_is_a_stub(self):
-        result = apply_command(AppState(), "thx", 1.0)
-        self.assertEqual((result.state.action, result.state.notice), ("none", "Auto Release: not available yet"))
+    def test_thx_in_manual_needs_the_basket_and_data(self):
+        result = apply_command(AppState(), "thx", 1.0)  # routed to start_auto_release by the loop
+        self.assertEqual(result.state, AppState())
         self.assertFalse(result.stop_base or result.disengage_arm)
 
     def test_hi_and_thx_ignored_while_action_runs(self):
@@ -125,7 +126,7 @@ class NoticeAndControlTests(unittest.TestCase):
         self.assertEqual((cleared.notice, cleared.notice_until, cleared.notice_level), ("", 0.0, "info"))
 
     def test_custom_notice_duration(self):
-        self.assertEqual(apply_command(AppState(), "thx", 1.0, notice_s=0.5).state.notice_until, 1.5)
+        self.assertEqual(apply_command(FSC, "hi", 1.0, notice_s=0.5).state.notice_until, 1.5)
 
     def test_with_notice_sets_level(self):
         state = with_notice(AppState(), "Captured", 2.0)

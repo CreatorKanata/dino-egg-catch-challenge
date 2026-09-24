@@ -58,7 +58,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(fields["v"], 1)
         self.assertEqual(fields["status"], {"mode": "fsc", "action": "none", "voice_listening": True,
                                             "notice": "Listening...", "arm_status": "leader fault",
-                                            "stopped": False, "notice_level": "info", "overlays": []})
+                                            "stopped": False, "notice_level": "info", "recording_s": None,
+                                            "progress": None, "overlays": []})
         self.assertEqual(fields["frames"], [{"name": "top", "w": 4, "h": 3}, {"name": "front", "w": 0, "h": 0}])
         self.assertEqual(body, FRAME.tobytes())
 
@@ -140,6 +141,25 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(name=name):
                 line = json.dumps({**good, "status": fields}).encode() + b"\n"
                 self.assertIsNone(read_packet(io.BytesIO(line)))
+
+    def test_recording_progress_and_rect_overlays_round_trip(self):
+        rects = (Overlay("front", 0.52, 0.42, 0.78, 0.68, "basket", "basket"),
+                 Overlay("front", 0.53, 0.41, 0.8, 0.7, "release_target", ""))
+        status = replace(STATUS, action="auto_release", arm_status="auto release", recording_s=4.2, progress=0.5,
+                         overlays=rects)
+        self.assertEqual(read_packet(io.BytesIO(encode(DisplayPacket(DRIVE, CONTROLLER, (), status)))).status, status)
+
+    def test_malformed_optional_numbers_return_none(self):
+        good = json.loads(encode(packet(())).partition(b"\n")[0])
+        cases = {"negative recording": {"recording_s": -1.0}, "progress above one": {"progress": 1.5},
+                 "text progress": {"progress": "half"}, "bool recording": {"recording_s": True},
+                 "nan progress": {"progress": float("nan")}}
+        for name, fields in cases.items():
+            with self.subTest(name=name):
+                line = json.dumps({**good, "status": {**good["status"], **fields}}).encode() + b"\n"
+                self.assertIsNone(read_packet(io.BytesIO(line)))
+        missing = {key: value for key, value in good["status"].items() if key != "progress"}
+        self.assertIsNone(read_packet(io.BytesIO(json.dumps({**good, "status": missing}).encode() + b"\n")))
 
     def test_default_status_round_trip(self):
         plain = DisplayPacket(drive=DRIVE, controller=CONTROLLER, frames=())

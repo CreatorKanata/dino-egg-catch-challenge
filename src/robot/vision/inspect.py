@@ -6,17 +6,22 @@ and the alignment target drawn, so the owner can tune the HSV ranges at the venu
 robot. `--debug` also lists every spot cluster (core spots, median spot diameter, search window)
 with its egg measurements and the rule that rejected it. `--rgb` reads an RGB-ordered image, such as a
 signboard screenshot of the Pi cameras taken before the color-order fix (PI_CAMERA_COLOR_ORDER in
-config.py).
+config.py). `--basket` also runs the Auto Release basket detector, prints its bbox, size class, and
+average time, and draws its box and the release target.
 """
 
 import argparse
 from pathlib import Path
 import sys
+import time
 from typing import Any
 
 import cv2
 
 from robot.config import ALIGN_TARGET_CX, ALIGN_TARGET_CY, ALIGN_TARGET_H, ALIGN_TARGET_W
+from robot.vision.basket_detector import detect_basket
+from robot.vision.basket_size import BasketDetection, classify_basket
+from robot.vision.config_vision import RELEASE_TARGET_CX, RELEASE_TARGET_CY, RELEASE_TARGET_H, RELEASE_TARGET_W
 from robot.vision.egg_detector import Candidate, detect_eggs, inspect_candidates
 from robot.vision.egg_size import EggDetection, classify_size
 from robot.vision.frames import rgb_to_bgr
@@ -24,7 +29,9 @@ from robot.vision.frames import rgb_to_bgr
 OK_BGR = (90, 200, 90)
 OUT_BGR = (40, 120, 220)
 TARGET_BGR = (190, 226, 240)
+BASKET_BGR = (185, 110, 235)
 LINE_PX = 2
+TIMING_RUNS = 10  # basket detector runs averaged for the printed time (after one warm-up run)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -33,6 +40,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rgb", action="store_true", help="the image is RGB-ordered (old signboard screenshot)")
     parser.add_argument("--debug", action="store_true",
                         help="list every candidate component with its measurements and rejection reason")
+    parser.add_argument("--basket", action="store_true",
+                        help="also detect the pink basket (Auto Release) and draw it with the release target")
     return parser.parse_args(argv)
 
 
@@ -63,6 +72,36 @@ def describe_candidate(candidate: Candidate) -> str:
             f"bbox=({candidate.x},{candidate.y},{candidate.w},{candidate.h}) area={candidate.area_px} "
             f"aspect={candidate.aspect:.2f} scale={candidate.scale:.2f} solidity={solidity} fill={fill} "
             f"border={'yes' if candidate.touches_border else 'no'} spots[{spots}]  {verdict}")
+
+
+def describe_basket(det: BasketDetection | None, elapsed_ms: float) -> str:
+    """One line for the basket detection (or its absence) with the size class and average time."""
+    if det is None:
+        return f"basket: none  size={classify_basket(None)}  ({elapsed_ms:.1f} ms)"
+    return (f"basket: cx={det.cx:.3f} cy={det.cy:.3f} w={det.w:.3f} h={det.h:.3f}  "
+            f"area={det.area_fraction:.3f} fill={det.fill:.3f}  size={classify_basket(det)}  ({elapsed_ms:.1f} ms)")
+
+
+def time_basket(frame: Any, runs: int = TIMING_RUNS) -> tuple[BasketDetection | None, float]:
+    """The basket detection and its average time in ms over `runs` calls after one warm-up call."""
+    found = detect_basket(frame)
+    started = time.perf_counter()
+    for _ in range(runs):
+        detect_basket(frame)
+    return found, 1000.0 * (time.perf_counter() - started) / max(1, runs)
+
+
+def annotate_basket(frame: Any, basket: BasketDetection | None) -> Any:
+    """A copy of `frame` with the release target (thin) and the basket box, if any."""
+    out = frame.copy()
+    top_left, bottom_right = _box(out, RELEASE_TARGET_CX, RELEASE_TARGET_CY, RELEASE_TARGET_W, RELEASE_TARGET_H)
+    cv2.rectangle(out, top_left, bottom_right, TARGET_BGR, 1)
+    if basket is not None:
+        top_left, bottom_right = _box(out, basket.cx, basket.cy, basket.w, basket.h)
+        cv2.rectangle(out, top_left, bottom_right, BASKET_BGR, LINE_PX)
+        cv2.putText(out, "basket", (top_left[0], max(top_left[1] - 6, 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                    BASKET_BGR, 1, cv2.LINE_AA)
+    return out
 
 
 def _box(frame: Any, cx: float, cy: float, w: float, h: float) -> tuple[tuple[int, int], tuple[int, int]]:
@@ -108,8 +147,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{len(candidates)} spot cluster(s):")
         for candidate in candidates:
             print(describe_candidate(candidate))
+    annotated = annotate(frame, detections)
+    if args.basket:
+        basket, elapsed_ms = time_basket(frame)
+        print(describe_basket(basket, elapsed_ms))
+        annotated = annotate_basket(annotated, basket)
     target = output_path(args.image)
-    if not cv2.imwrite(str(target), annotate(frame, detections)):
+    if not cv2.imwrite(str(target), annotated):
         print(f"Cannot write {target}", file=sys.stderr)
         return 1
     print(f"Wrote {target}")

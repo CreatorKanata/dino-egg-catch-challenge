@@ -27,7 +27,10 @@ FRAME_SIDE_MAX = 8192
 CHANNELS = 3
 DRIVE_FIELDS = ("speed_index", "catch_requested", "input_lost", "pending_rotation_deg")
 CONTROLLER_FIELDS = ("up", "down", "left", "right", "button", "synchronized")
-STATUS_FIELDS = ("mode", "action", "voice_listening", "notice", "arm_status", "stopped", "notice_level")
+STATUS_FIELDS = ("mode", "action", "voice_listening", "notice", "arm_status", "stopped", "notice_level",
+                 "recording_s", "progress")
+# Optional status numbers: None or a finite number within these bounds.
+OPTIONAL_BOUNDS = {"recording_s": (0.0, 24 * 3600.0), "progress": (0.0, 1.0)}
 OVERLAY_NUMBERS = ("cx", "cy", "w", "h", "angle")
 # Normalized overlay bounds: a fitted ellipse of a partly visible egg may extend past the frame.
 OVERLAY_BOUNDS = {"cx": (-1.0, 2.0), "cy": (-1.0, 2.0), "w": (0.0, 3.0), "h": (0.0, 3.0), "angle": (-360.0, 360.0)}
@@ -142,6 +145,12 @@ def _bounded(key: str, value: Any) -> bool:
     return type(value) in (int, float) and math.isfinite(value) and low <= value <= high
 
 
+def _optional(key: str, value: Any) -> bool:
+    """None, or a finite number within OPTIONAL_BOUNDS[key]."""
+    low, high = OPTIONAL_BOUNDS[key]
+    return value is None or (type(value) in (int, float) and math.isfinite(value) and low <= value <= high)
+
+
 def _overlay(fields: Any) -> Overlay | None:
     if not isinstance(fields, dict) or fields.get("kind") not in OVERLAY_KINDS:
         return None
@@ -171,6 +180,8 @@ def _status(fields: Any) -> DisplayStatus | None:
     if fields.get("mode") not in MODES or fields.get("action") not in ACTIONS:
         return None
     if fields.get("arm_status") not in ARM_STATUSES or fields.get("notice_level") not in NOTICE_LEVELS:
+        return None
+    if any(key not in fields or not _optional(key, fields[key]) for key in OPTIONAL_BOUNDS):
         return None
     overlays = _overlays(fields.get("overlays"))
     if overlays is None:

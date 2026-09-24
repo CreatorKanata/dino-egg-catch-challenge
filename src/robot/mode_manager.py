@@ -3,15 +3,17 @@
 Pure and stdlib-only. Implements the decisions in docs/spec/operating-modes.md, section 2:
 `Stop` is a full stop and reset in every mode and latches a stopped state that only `Go Go!`
 releases (back to Manual Mode); otherwise `Go Go!` toggles Manual Mode and FSC with zero base
-velocities first, and presses are ignored while an automatic action runs. Phase 2 step 1: `Hi!`
-in Manual Mode checks the egg size (start_auto_catch) and starts the base alignment; the catch
-itself, Auto Release, and FSC are still display-only stubs.
+velocities first, and presses are ignored while an automatic action runs. Phase 2: `Hi!` in
+Manual Mode checks the egg size (start_auto_catch) and starts the base alignment; `Thx` checks the
+basket size and the recorded home pose and release motion (start_auto_release) and starts Auto
+Release (auto_release.py). The catch itself and FSC are still display-only stubs.
 """
 
 from dataclasses import dataclass, replace
 from typing import Final, Literal
 
 from robot.align import AlignResult, AlignState, start_align
+from robot.auto_release import ReleaseOutcome, ReleaseRequest, ReleaseState, start_release
 from robot.config import NOTICE_SECONDS
 from robot.vision.egg_size import SizeClass
 
@@ -22,7 +24,18 @@ ACTIONS: Final = ("none", "auto_catch", "auto_release")
 
 NOTICE_STOP: Final = "STOP"
 NOTICE_MODE: Final = {"manual": "MANUAL", "fsc": "FSC"}
-NOTICE_AUTO_RELEASE_STUB: Final = "Auto Release: not available yet"
+NOTICE_BASKET_SIZE: Final = {"none": "Basket not in view", "too_small": "Basket too far"}
+NOTICE_NO_HOME: Final = "Home pose not recorded"
+NOTICE_NO_MOTION: Final = "Release motion not recorded"
+NOTICE_RELEASE_ALIGNING: Final = "Aligning to basket..."
+NOTICE_RELEASE: Final = {
+    "play_started": ("Releasing...", "info"),
+    "done": ("Released!", "info"),
+    "lost": ("Basket lost", "warning"),
+    "align_timeout": ("Could not align", "warning"),
+    "home_timeout": ("Arm did not reach home", "warning"),
+    "start_timeout": ("Arm did not reach the release start", "warning"),
+}
 NOTICE_LISTENING: Final = "Listening..."
 NOTICE_VOICE_ENDED: Final = "Voice input ended"
 NOTICE_SIZE: Final = {"none": "No egg in view", "too_small": "Egg too far", "too_large": "Egg too close"}
@@ -41,7 +54,8 @@ NOTICE_LEVELS: Final = ("info", "warning")
 
 @dataclass(frozen=True)
 class AppState:
-    """Current mode, running action and its alignment, FSC voice input, notice, and the Stop flag."""
+    """Current mode, running action and its state (Auto Catch alignment, Auto Release), FSC voice
+    input, notice, and the Stop flag."""
 
     mode: Mode = "manual"
     action: Action = "none"
@@ -51,6 +65,7 @@ class AppState:
     stopped: bool = False
     notice_level: NoticeLevel = "info"
     align: AlignState = AlignState()
+    release: ReleaseState = ReleaseState()
 
 
 @dataclass(frozen=True)
@@ -96,8 +111,7 @@ def _hi(state: AppState, now: float, notice_s: float) -> Transition:
 
 
 def _thx(state: AppState, now: float, notice_s: float) -> Transition:
-    if state.mode == "manual":  # Phase 1 stub: Auto Release does not start
-        return Transition(state=with_notice(state, NOTICE_AUTO_RELEASE_STUB, now, notice_s))
+    # Manual Mode needs the basket and the data files: the loop routes it to start_auto_release.
     return Transition(state=state)  # owner decision: no action in FSC
 
 
@@ -109,8 +123,9 @@ def apply_command(state: AppState, command: str, now: float, notice_s: float = N
 
     `stop` always works, latches `stopped`, and cancels any action. While stopped, only
     `mode_toggle` does anything: it resumes Manual Mode. Other known commands are ignored while
-    an action runs. Unknown commands leave the state unchanged. `hi` in Manual Mode is left
-    unchanged here because it needs the egg size; use start_auto_catch for it.
+    an action runs. Unknown commands leave the state unchanged. `hi` and `thx` in Manual Mode are
+    left unchanged here because they need the egg size (start_auto_catch) or the basket and the
+    recorded data (start_auto_release).
     """
     if command == "stop":
         return _stop(now, notice_s)
@@ -147,6 +162,39 @@ def finish_auto_catch(
         return Transition(state=state)
     notice, level = NOTICE_ALIGN_RESULT[result]
     ended = replace(state, action="none", align=AlignState())
+    return Transition(state=with_notice(ended, notice, now, notice_s, level), stop_base=True, disengage_arm=True)
+
+
+def start_auto_release(
+    state: AppState, request: ReleaseRequest, now: float, notice_s: float = NOTICE_SECONDS
+) -> Transition:
+    """`Thx` in Manual Mode with the latest basket size class and the loaded home pose and motion.
+
+    No usable basket or a missing file shows a warning notice and nothing moves; otherwise the
+    basket alignment starts. Only in Manual Mode, not stopped, and with no action running.
+    """
+    if state.mode != "manual" or state.stopped or state.action != "none":
+        return Transition(state=state)
+    if request.size != "ok":
+        return Transition(state=with_notice(state, NOTICE_BASKET_SIZE[request.size], now, notice_s, "warning"))
+    if request.home is None:
+        return Transition(state=with_notice(state, NOTICE_NO_HOME, now, notice_s, "warning"))
+    if not request.frames:
+        return Transition(state=with_notice(state, NOTICE_NO_MOTION, now, notice_s, "warning"))
+    started = replace(state, action="auto_release", release=start_release(now, request.home, request.frames))
+    return Transition(state=with_notice(started, NOTICE_RELEASE_ALIGNING, now, notice_s), disengage_arm=True)
+
+
+def release_notice(state: AppState, outcome: ReleaseOutcome, now: float, notice_s: float = NOTICE_SECONDS) -> Transition:
+    """Apply a release outcome: "running" changes nothing, "play_started" only shows "Releasing...",
+    and a terminal outcome returns to Manual Mode with zero base velocities this frame and arm
+    following disengaged (it re-syncs to the leader slowly)."""
+    if outcome not in NOTICE_RELEASE or state.action != "auto_release":
+        return Transition(state=state)
+    notice, level = NOTICE_RELEASE[outcome]
+    if outcome == "play_started":
+        return Transition(state=with_notice(state, notice, now, notice_s, level))
+    ended = replace(state, action="none", release=ReleaseState())
     return Transition(state=with_notice(ended, notice, now, notice_s, level), stop_base=True, disengage_arm=True)
 
 

@@ -2,8 +2,9 @@
 
 Uses SDL's dummy video driver so rendering and event handling run without a display. The
 tests check that drawing (including the overlays) does not raise, that ESC ends the view, that
-typed text (KachiButton) and the capture key are returned by pump(), and that serve() turns them
-into command lines; pixels are asserted only for the egg outline color.
+typed text (KachiButton) and the staff keys (capture, save home, record) are returned by pump(),
+and that serve() turns them into command lines; pixels are asserted only for the egg and basket
+outline colors.
 """
 
 import os
@@ -68,6 +69,26 @@ class SignboardViewTests(unittest.TestCase):
         left_edge = (box.x + 1, box.y + box.h // 2)  # on the ellipse outline, inside the 3 px line
         self.assertEqual(tuple(self.view.surface.get_at(left_edge))[:3], DEFAULT_THEME.ok)
 
+    def test_render_basket_rectangle(self):
+        frame = np.zeros((48, 64, 3), dtype=np.uint8)
+        basket = Overlay("front", 0.5, 0.5, 0.5, 0.5, "basket", "basket")
+        target = Overlay("front", 0.5, 0.5, 0.8, 0.7, "release_target", "")
+        self.view.render({**NO_FRAMES, "front": frame}, DriveState(), INITIAL_STATE,
+                         DisplayStatus(overlays=(target, basket)))
+        from robot.signboard_layout import compute_layout, overlay_rect
+
+        fit = compute_layout(SIZE, 16, 16 / 9, 96).sides[0].fit(64, 48)
+        box = overlay_rect(basket, fit)
+        self.assertEqual(tuple(self.view.surface.get_at((box.x, box.y + box.h // 2)))[:3], DEFAULT_THEME.basket)
+
+    def test_staff_keys_are_reported(self):
+        pygame.event.clear()
+        for key in (pygame.K_b, pygame.K_r):
+            pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=key))
+        from robot.signboard import PumpResult
+
+        self.assertEqual(self.view.pump(), PumpResult(True, "", save_home=True, toggle_record=True))
+
     def test_target_label_below_and_egg_label_above(self):
         frame = np.zeros((48, 64, 3), dtype=np.uint8)
         target = Overlay("front", 0.5, 0.4, 0.5, 0.4, "target", "place the egg here")
@@ -116,6 +137,7 @@ class SignboardViewTests(unittest.TestCase):
         pygame.event.post(pygame.event.Event(pygame.TEXTINPUT, text="Stop"))
         pygame.event.post(pygame.event.Event(pygame.TEXTINPUT, text="Hi!"))
         pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_c))
+        pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_r))
         pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
         read_end, write_end = os.pipe()  # select() needs a real descriptor; nothing is ever written
         self.addCleanup(os.close, read_end)
@@ -126,7 +148,8 @@ class SignboardViewTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(),
                          b'{"v": 1, "type": "command", "command": "stop"}\n'
                          b'{"v": 1, "type": "command", "command": "hi"}\n'
-                         b'{"v": 1, "type": "command", "command": "capture"}\n')
+                         b'{"v": 1, "type": "command", "command": "capture"}\n'
+                         b'{"v": 1, "type": "command", "command": "toggle_record"}\n')
 
     @staticmethod
     def _pump_result(keep_running, typed, capture=False):

@@ -1,12 +1,13 @@
 """tests/robot/test_arm_follow.py: Hardware-free checks of leader-arm slow engagement and following.
 
 follow_step is pure, so holding on a missing leader, the speed-limited approach, engagement
-within tolerance, real-time following, the dt clamp, and the gripper key are verified directly.
+within tolerance, real-time following, the dt clamp, and the gripper key are verified directly,
+as are the shared approach_pose / within helpers used by Auto Release.
 """
 
 import unittest
 
-from robot.arm_follow import ArmFollowState, disengaged, follow_step
+from robot.arm_follow import ArmFollowState, approach_pose, disengaged, follow_step, within
 from robot.config import ARM_KEYS, LOOP_HZ
 
 HOLD = {key: 0.0 for key in ARM_KEYS}
@@ -69,6 +70,20 @@ class FollowStepTests(unittest.TestCase):
 
     def test_disengaged_helper(self):
         self.assertEqual(disengaged(), ArmFollowState(engaged=False))
+
+
+class ApproachHelperTests(unittest.TestCase):
+    def test_approach_pose_limits_every_key_and_can_skip_keys(self):
+        moved = approach_pose(HOLD, FAR, 0.05, speed=90.0)
+        self.assertEqual(set(moved.values()), {4.5})
+        partial = approach_pose(HOLD, FAR, 0.05, speed=90.0, keys=ARM_KEYS[:2])
+        self.assertEqual(tuple(partial), ARM_KEYS[:2])
+        self.assertEqual(approach_pose(HOLD, FAR, 5.0, speed=30.0)["arm_gripper.pos"], 30.0 * 2 / LOOP_HZ)
+
+    def test_within(self):
+        self.assertTrue(within(HOLD, {key: 3.0 for key in ARM_KEYS}, 3.0))
+        self.assertFalse(within(HOLD, {**HOLD, "arm_gripper.pos": 3.1}, 3.0))
+        self.assertTrue(within(HOLD, {**HOLD, "arm_gripper.pos": 50.0}, 3.0, keys=ARM_KEYS[:5]))
 
 
 if __name__ == "__main__":

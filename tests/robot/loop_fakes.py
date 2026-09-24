@@ -1,7 +1,7 @@
 """tests/robot/loop_fakes.py: Fake devices shared by the control-loop tests (not a test module).
 
 Stand-ins for the controller reader, LeKiwi adapter, leader arm, overhead camera, and signboard
-(DisplaySink) used by test_drive_loop.py and test_drive_loop_auto_catch.py. The adapter returns
+(DisplaySink) used by test_drive_loop.py, test_drive_loop_auto_catch.py, and test_drive_loop_release.py. The adapter returns
 a tiny RGB-ordered front frame, like LeKiwiClient, so the loop's BGR conversion is observable.
 Imported as a top-level module because the suite is discovered with `-s tests/robot`.
 """

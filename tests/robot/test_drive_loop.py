@@ -4,8 +4,8 @@ Fake devices stand in for the controller, robot, leader arm, camera, and signboa
 (DisplaySink), so the wiring (action sent before viewing, KachiButton commands folded in,
 Stop and mode switches zeroing the base, leader poses reaching send_action once engaged, the
 Pi frames converted to BGR, and ESC/close or a dead signboard ending the loop) is verified
-without hardware. The egg detector is patched out, so OpenCV is never loaded here; Auto Catch
-wiring is in test_drive_loop_auto_catch.py. Skipped when LeRobot is unavailable.
+without hardware. The egg and basket detectors are patched out, so OpenCV is never loaded here;
+Auto Catch wiring is in test_drive_loop_auto_catch.py, Auto Release in test_drive_loop_release.py. Skipped when LeRobot is unavailable.
 """
 
 from dataclasses import replace
@@ -46,10 +46,13 @@ def devices(reader, view, camera=None, leader=None):
 
 
 def patch_detector(test):
-    """Replace the egg detector (OpenCV) with a stub that finds nothing."""
+    """Replace the egg and basket detectors (OpenCV) with stubs that find nothing."""
     patcher = mock.patch.object(drive_loop, "detect_eggs", return_value=())
     detector = patcher.start()
     test.addCleanup(patcher.stop)
+    basket = mock.patch.object(drive_loop, "detect_basket", return_value=None)
+    basket.start()
+    test.addCleanup(basket.stop)
     return detector
 
 
