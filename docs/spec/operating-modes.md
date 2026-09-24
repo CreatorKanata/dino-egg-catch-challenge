@@ -16,9 +16,9 @@ This document supersedes the three-mode table in [concept.md](../proposals/conce
 
 Auto Catch and Auto Release exist only as attendee-triggered actions in Manual Mode. FSC contains the same two procedures and runs them automatically, so they are built first and shared. FSC is a demonstration run by staff, not the default attendee experience; how long one run takes is measured once it works. The Gemini, navigation, and speech parts are designed in [dino-egg-catch-challenge-gemini-integration.md](../proposals/dino-egg-catch-challenge-gemini-integration.md).
 
-### Arm home position
+### Arm poses
 
-The arm has a home position: joints folded with the head pointing **up** (owner decision, 2026-09-24; a downward head hit the basket during release). In this pose the dinosaur can hold an egg and be driven around without anyone touching the leader arm, which is what makes single-player Manual Mode possible. The home pose is recorded once on the robot from the signboard keyboard (`b` key, staff only) into `data/arm/home_pose.json`; it is also the base pose that Auto Release starts from. The release motion is recorded the same way (`r` key toggles recording) into `data/arm/release_motion.json`. Staff keys never use a letter that a KachiButton phrase types (so not `h`, which "Thx" and "Hi!" contain).
+The arm has two recorded poses (owner decision, 2026-09-25). The **release pose** ("home"): joints folded with the head pointing **up** (a downward head hit the basket during release); this is the pose for driving with an egg and the start of Auto Release. The **catch pose**: head pointing **down** so the wrist camera sees the egg at the aligned position; the pick policy starts here with the egg already in view, and the app moves between the two poses with the slow scripted approach. Both are recorded from the leader arm with staff keys (`b` release/home, `k` catch) into `data/arm/`. In this pose the dinosaur can hold an egg and be driven around without anyone touching the leader arm, which is what makes single-player Manual Mode possible. The home pose is recorded once on the robot from the signboard keyboard (`b` key, staff only) into `data/arm/home_pose.json`; it is also the base pose that Auto Release starts from. The release motion is recorded the same way (`r` key toggles recording) into `data/arm/release_motion.json`. Staff keys never use a letter that a KachiButton phrase types (so not `h`, which "Thx" and "Hi!" contain).
 
 ## 2. KachiButton controls (owner decisions, 2026-09-24)
 
@@ -60,7 +60,9 @@ Arm torque is deliberately not released on `Stop`: the SO-ARM101 has no brakes, 
 
 1. Precondition, evaluated on the front camera at the press: an egg is detected and its bounding-box height, as a fraction of the frame height, lies between `AUTO_CATCH_MIN_EGG_H` (too far) and `AUTO_CATCH_MAX_EGG_H` (too close). Otherwise "No egg in view", "Egg too far", or "Egg too close" and nothing moves. The best position is stored as the normalized bbox center and height (`ALIGN_TARGET_*`) measured from a reference frame captured on the robot with the egg placed where the owner wants it; the signboard draws that position as an egg-shaped outline at all times in Manual Mode so it also guides manual driving (owner suggestion, 2026-09-24).
 2. Alignment (owner decision): the front camera gives the egg's position relative to the body. An image-based controller drives the base until the egg reaches the predefined target position and size in the front image, the one the pick policy was trained from. This step is what raises the catch success rate; the pick policy never has to compensate for base placement.
-3. Catch: the pick policy runs on the wrist camera only (owner decision, consistent with the golf-ball result). Success is checked before the signboard says "caught".
+3. Catch pose: the arm moves slowly to the recorded catch pose (head down). The wrist camera must then show the egg; otherwise "Egg not in wrist view" and the arm returns to the release pose.
+4. Catch: the pick policy runs on the wrist camera only (owner decision, consistent with the golf-ball result), from the catch pose until the egg is held. Success is checked before the signboard says "caught".
+5. The arm moves slowly to the release pose (head up) with the egg held; driving and Auto Release continue from there.
 
 ### Auto Release
 
@@ -86,7 +88,7 @@ Egg colors (owner decision, 2026-09-24): white eggs with **green, red, or orange
 | --- | --- | --- |
 | 1 | Mode manager, KachiButton phrase detection through the signboard (`Go Go!`, `Hi!`, `Thx`, `Stop`), Manual Mode with leader arm and slow engagement, mode text on the signboard. Auto Catch, Auto Release, and FSC show "not available yet" and do not move the robot | Owner drives and puppets, alone and with a second person; the four phrases change the display and `Stop` zeroes the base |
 | 2 | Front-camera egg and basket detectors with venue calibration; Auto Catch precondition and base alignment; Auto Release precondition, home pose, and recorded release motion | Alignment ends with the egg at the target image position; release delivers a held egg into the basket |
-| 3 | Policy runner for the trained `pick_egg` checkpoint (wrist camera), success check, one automatic retry | Auto Catch succeeds from a `Hi!` press |
+| 3 | Catch pose and wrist-view check in the Auto Catch flow; episode recording from the catch pose; ACT training in the fork; policy runner for the trained `pick_egg` checkpoint (wrist camera), success check, one automatic retry | Auto Catch succeeds from a `Hi!` press |
 | 4 | FSC: overhead camera, Gemini ER 2 target selection with rectangle confirmation, voice in and out, drive to the egg, return by pink beacon | End-to-end run from a spoken request to a released egg; duration measured |
 
 ## 7. Open points
