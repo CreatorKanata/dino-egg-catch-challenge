@@ -38,7 +38,7 @@ Rules that apply to every switch:
 - Switching modes first sends zero base velocities and holds the arm where it is. No mode starts with motion.
 - Auto Catch and Auto Release are one-shot actions that return to Manual Mode when they finish, fail their precondition, or are stopped.
 - A press while an automatic action is running is ignored; `Stop` always works.
-- The signboard shows the current mode in large text (Manual or FSC first; richer artwork later), the running action, and for a rejected Auto Catch or Auto Release the reason ("No egg in view", "Egg too far", "Egg too close", "Egg lost", "Could not align", "Basket not in view", "Basket too far", "Basket lost", "Home pose not recorded", "Release motion not recorded", "Arm did not reach home") for a few seconds in the warning color. There is never a dialog to dismiss: attendees have no cursor.
+- The signboard shows the current mode in large text (Manual or FSC first; richer artwork later), the running action, and for a rejected Auto Catch or Auto Release the reason ("No egg in view", "Egg too far", "Egg too close", "Egg lost", "Could not align", "Basket not in view", "Basket too far", "Basket lost", "Home pose not recorded", "Release motion not recorded", "Arm did not reach home", "Catch pose not recorded", "Egg not in wrist view", "Arm did not reach the catch pose", "Arm did not reach the release pose") for a few seconds in the warning color; informational notices such as "Catch: policy not available yet" and "Ready" use the normal color. A failure warning is not replaced by "Ready" when the arm returns to the release pose. There is never a dialog to dismiss: attendees have no cursor.
 
 ### Emergency stop behavior
 
