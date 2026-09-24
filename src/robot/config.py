@@ -246,7 +246,7 @@ RECORD_KEY: Final = "r"  # start / stop recording the release motion
 SAVE_HOME_COMMAND: Final = "save_home"
 TOGGLE_RECORD_COMMAND: Final = "toggle_record"
 RELEASE_HOME_TIMEOUT_S: Final = 8.0  # arm approach to the home pose (and the motion's start)
-RELEASE_PLAYBACK_SPEED: Final = 0.5  # 1.0 = recorded speed; the first physical test runs at 0.5
+RELEASE_PLAYBACK_SPEED: Final = 1.0  # 1.0 = recorded speed; 0.5 was used for the first robot test (2026-09-25), which the owner found slow
 RELEASE_MAX_JOINT_STEP_DEG_PER_S: Final = 90.0  # playback: per-frame change cap on every joint
 RECORD_MAX_S: Final = 30.0  # a release recording stops and saves itself at this length
 

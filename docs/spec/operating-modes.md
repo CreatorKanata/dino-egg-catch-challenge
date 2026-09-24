@@ -1,7 +1,7 @@
 <!-- docs/spec/operating-modes.md: Record the owner-decided operating modes, their triggers, and what each needs before it can run on the robot. -->
 # Operating Modes
 
-Written: 2026-09-24. Status: owner decisions on the mode structure, KachiButton mapping, arm engagement, Auto Catch alignment, Auto Release motion, voice input, emergency stop, and home-position handling, recorded from the design discussion on that date; the specification is considered settled for Phase 1. Manual Mode (driving, leader-arm puppeteering with an egg caught, `Go Go!` mode switching, slow arm re-synchronization) was owner-tested on the robot on 2026-09-24; Phase 1 is complete. Everything else is design intent until the sections below say otherwise.
+Written: 2026-09-24. Status: owner decisions on the mode structure, KachiButton mapping, arm engagement, Auto Catch alignment, Auto Release motion, voice input, emergency stop, and home-position handling, recorded from the design discussion on that date; the specification is considered settled for Phase 1. Manual Mode (driving, leader-arm puppeteering with an egg caught, `Go Go!` mode switching, slow arm re-synchronization) was owner-tested on the robot on 2026-09-24; Phase 1 is complete. Auto Catch alignment and Auto Release (recorded motion into the pink basket) were owner-tested on the robot on 2026-09-24 and 2026-09-25. Everything else is design intent until the sections below say otherwise.
 
 This document supersedes the three-mode table in [concept.md](../proposals/concept.md) (Drive, Puppet, Autonomous). Drive Mode and Puppet Mode run at the same time as Manual Mode; the autonomous experience is split into Auto Catch, Auto Release, and Full Self-Catching.
 

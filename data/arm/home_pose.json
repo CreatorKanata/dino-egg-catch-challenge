@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "recorded_at": "2026-09-25T00:23:28+09:00",
+  "note": "Home (base) pose: neck folded, mouth down. Commanded arm pose saved with the HOME_KEY.",
+  "pose": {
+    "arm_shoulder_pan.pos": -7.472527472527473,
+    "arm_shoulder_lift.pos": -99.16483516483517,
+    "arm_elbow_flex.pos": 99.38461538461539,
+    "arm_wrist_flex.pos": -39.56043956043956,
+    "arm_wrist_roll.pos": -2.857142857142857,
+    "arm_gripper.pos": 13.48314606741573
+  }
+}
