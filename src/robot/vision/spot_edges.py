@@ -39,7 +39,7 @@ def _verified(cv2: Any, ellipse: Any, masks: FrameMasks, params: DetectorParams)
         semi_a = semi_b = radius
     if min(semi_a, semi_b) < MIN_SEMI_AXIS_PX:
         return None
-    height, width = masks.components.shape
+    height, width = masks.shape
     reach = int(math.ceil(max(semi_a, semi_b))) + 1
     left, top = max(0, int(cx) - reach), max(0, int(cy) - reach)
     right, bottom = min(width, int(cx) + reach + 1), min(height, int(cy) + reach + 1)

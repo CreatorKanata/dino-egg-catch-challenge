@@ -5,7 +5,9 @@ other runtime value, including the alignment target and the size precondition. S
 All values are placeholders: calibrate at the venue with `c` captures and
 `python -m robot.vision.inspect --debug`. Checked against the robot's front captures
 20260924-220742 (best position), -220336 (pink basket behind the egg), -220404 (no basket),
--222325 (far egg, bluish lower half), and -223853 (strong light, glints on the tarp wrinkles).
+-222325 (far egg, bluish lower half), -223853 (strong light, glints on the tarp wrinkles), and the
+red-spotted egg at the best position -225648 (room light), -225701 (extra light), and -230143 (pink
+basket directly behind it).
 HSV uses OpenCV ranges: H 0-179, S and V 0-255.
 """
 
@@ -16,19 +18,26 @@ EGG_BODY_HSV: Final = ((0, 0, 40), (179, 50, 255))
 EGG_SPOT_HSV: Final = {
     "green": (((35, 60, 15), (100, 255, 255)),),  # teal-looking spots (H up to 100), shadowed down to V 15
     "blue": (((101, 120, 90), (130, 255, 255)),),  # S/V floor keeps the blue tarp (S 90-150, V < 90) out
-    "red": (((0, 150, 60), (10, 255, 255)), ((170, 150, 60), (179, 255, 255))),  # S >= 150: not the pink basket
+    # Red spots (-225648/-225701): H median 177 wrapping to 0-12, S 157-204 (p5-p95), V down to 33 on
+    # the shadowed center spot.
+    "red": (((0, 140, 25), (10, 255, 255)), ((174, 140, 25), (179, 255, 255))),
 }
-# Pink basket (measured on the robot: H 165-179, S 90-170, V 48-68). Excluded from the body and spot
-# masks so the basket never joins an egg or adds spots. Auto Release will reuse it for its detector.
-BASKET_HSV: Final = ((150, 60, 40), (179, 200, 255))
+# Pink basket (-220336: H p5/50/95 135/172/176, S 77/131/182, V 21/64/73). Two ranges so it never
+# overlaps the red spots: H 150-173 at any S >= 60, and H 174-179 only below the red S floor (140).
+# Excluded from the body and the green/blue spot masks; the red mask drops only the first range
+# (the second is below its S floor anyway). A few basket pixels at H 174-176 with S up to ~182 can
+# still reach the red mask; the cluster, scale, and spot-fraction rules reject them. Auto Release
+# will reuse BASKET_HSV for its basket detector.
+BASKET_HSV: Final = (((150, 60, 20), (173, 255, 255)), ((174, 60, 20), (179, 139, 255)))
+BASKET_EXCLUDED_FROM_RED: Final = BASKET_HSV[:1]
 
 # Segmentation is anchored on the spots and scaled by their size (robot run 2026-09-24: under a
 # strong light, white glints on the tarp wrinkles are not separable from the egg by color).
 # Spot stage: "hsv" (connected components of the spot color masks) or "edge" (OpenCV contrib
 # EdgeDrawing ellipses verified by the spot color inside; needs opencv-contrib-python-headless,
 # falls back to "hsv" without cv2.ximgproc). On the check captures (2026-09-24) "hsv" found one
-# egg in all seven test images at 8-11 ms; "edge" found fewer spots (2-3 per egg), matched on the
-# five robot captures but split the old front_ref screenshot into two half eggs, at 10-13 ms.
+# egg in all ten test images at 9-12 ms; "edge" found fewer spots (2-3 per egg), matched on the
+# eight robot captures but split the old front_ref screenshot into two half eggs, at 10-13 ms.
 EGG_SPOT_DETECTOR: Final = "hsv"
 EGG_EDGE_SPOT_MIN_FILL: Final = 0.6  # "edge": share of the ellipse area in one spot color
 EGG_MIN_SPOT_AREA_PX: Final = 40  # spot blobs smaller than this are ignored
@@ -40,8 +49,9 @@ EGG_MIN_SPOT_DIAMETER_PX: Final = 10.0
 EGG_SPOT_CLUSTER_FACTOR: Final = 3.0
 # A cluster's scale, window, and component vote use only its core spots, those at least this x the
 # largest spot diameter in the cluster; smaller greenish blobs (dark tarp folds) may join but do not
-# shrink the scale.
-EGG_CORE_SPOT_FACTOR: Final = 0.5
+# shrink the scale. 0.35 (not 0.5) keeps the red egg's one oversized center spot (d 140 vs 34-79)
+# from inflating the median: scales are then 3.25-4.1 on all eight check captures.
+EGG_CORE_SPOT_FACTOR: Final = 0.35
 EGG_WINDOW_FACTOR: Final = 2.0  # search window = cluster bbox grown by this x median d per side
 EGG_CLOSE_KERNEL_PX: Final = 15  # joins the body across thin dark lines (the shell's crack)
 EGG_OPEN_SPOT_FACTOR: Final = 0.5  # then an open of this x median d removes glints thinner than that
@@ -54,8 +64,8 @@ EGG_MIN_SPOTS: Final = 1
 # Spot pixels / egg area: 0.25-0.37 on every check capture, 0.07 for a false white patch with two
 # small spots at the left edge of -222325.
 EGG_MIN_SPOT_FRACTION: Final = 0.12
-# Egg bbox height / median spot diameter; measured ~4 on the captures (spot / egg height ~0.25).
-EGG_SCALE_RANGE: Final = (2.5, 6.0)
+# Egg bbox height / median core spot diameter: 3.25-4.1 on the check captures (green and red eggs).
+EGG_SCALE_RANGE: Final = (2.0, 6.5)
 EGG_MIN_SOLIDITY: Final = 0.85  # contour area / convex hull area: an egg outline is convex
 # Contour area / fitted-ellipse area; only for eggs clear of the frame border (a partly visible
 # egg is a truncated ellipse, still convex, so it keeps only the solidity test).

@@ -5,7 +5,8 @@ white ellipse wider than tall with five spots of diameter ~1/4 of the egg height
 spot color (red on both hue ends) gives one detection with a tight bbox and a fitted ellipse;
 spotless shapes, pink blobs, and white bars give none; thin glint streaks touching an egg do not
 widen its box; two distant eggs give two clusters; eggs cut by the border and notched eggs are
-found; every candidate reports the rule that rejected it. Runs in its own interpreter (see
+found; a red-spotted egg in front of the pink basket stays one red egg; every candidate reports
+the rule that rejected it. Runs in its own interpreter (see
 tests/robot/test_vision_suite.py) because OpenCV and pygame must not share a process on macOS.
 """
 
@@ -20,7 +21,9 @@ WIDTH, HEIGHT = 640, 480
 BROWN = (40, 70, 110)  # BGR: H ~13, S ~160 -> neither white body nor any spot color
 WHITE = (245, 245, 245)
 PINK = (110, 80, 150)  # BGR: H ~167, S ~119, V 150 -> inside BASKET_HSV
-SPOT_BGR = {"green": (40, 160, 60), "blue": (200, 60, 30), "red_low": (40, 40, 220), "red_high": (90, 30, 220)}
+# red_low is H 0, red_high H 177 (both ends of the red hue range)
+SPOT_BGR = {"green": (40, 160, 60), "blue": (200, 60, 30), "red_low": (40, 40, 220), "red_high": (59, 43, 200)}
+BASKET_BGR = ((38, 29, 60), (29, 18, 60))  # HSV (171, 132, 60) and (172, 179, 60): the real basket's pink
 SPOT_LAYOUT = ((-0.55, 0.05), (0.55, -0.1), (0.0, -0.6), (0.0, 0.55), (0.05, 0.0))  # x a, y b
 TOLERANCE_PX = 4
 
@@ -106,6 +109,23 @@ class DetectEggsTests(unittest.TestCase):
         detections = detect_eggs(draw_egg(frame, center, axes, "green"))
         self.assertEqual([det.color for det in detections], ["green"])
         self.assert_box(detections[0], center, axes)
+
+    def test_red_egg_in_front_of_the_pink_basket_is_one_red_egg(self):
+        frame = background()
+        cv2.rectangle(frame, (200, 40), (639, 200), BASKET_BGR[0], -1)  # S 132: basket range 2 / below red S
+        cv2.rectangle(frame, (200, 200), (639, 380), BASKET_BGR[1], -1)  # S 179 at H 172: basket range 1
+        center, axes = (280, 250), (130, 100)
+        for spot in ("red_low", "red_high"):
+            with self.subTest(spot=spot):
+                detections = detect_eggs(draw_egg(frame.copy(), center, axes, spot))
+                self.assertEqual([det.color for det in detections], ["red"])
+                self.assert_box(detections[0], center, axes)
+
+    def test_plain_pink_basket_region_yields_nothing(self):
+        frame = background()
+        cv2.rectangle(frame, (100, 60), (540, 240), BASKET_BGR[0], -1)
+        cv2.rectangle(frame, (100, 240), (540, 420), BASKET_BGR[1], -1)
+        self.assertEqual(detect_eggs(frame), ())
 
     def test_egg_cut_by_the_frame_border_is_found(self):
         detections = detect_eggs(draw_egg(background(), (70, 240), (130, 100), "green"))

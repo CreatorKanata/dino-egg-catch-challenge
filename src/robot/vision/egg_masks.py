@@ -1,7 +1,8 @@
 """src/robot/vision/egg_masks.py: Color masks, spot blobs, and spot clusters for the egg detector.
 
-First stage of egg_detector.py. From one BGR frame it builds the basket-free component mask
-(white body OR spot colors, AND NOT the pink basket) and one spot mask per color, finds the spot
+First stage of egg_detector.py. From one BGR frame it builds the basket-free white-body mask and
+one basket-free spot mask per color (egg_detector ORs the body with the spot colors of each
+cluster, so a green egg never picks up red-looking basket pixels), finds the spot
 blobs with their diameters, and groups them into clusters by single-linkage proximity scaled by
 spot size. Each cluster is one egg hypothesis whose median spot diameter sets the scale of the
 later segmentation (robot run 2026-09-24: tarp glints are not separable from the egg by color,
@@ -17,6 +18,7 @@ from typing import Any
 import numpy as np
 
 from robot.vision.config_vision import (
+    BASKET_EXCLUDED_FROM_RED,
     BASKET_HSV,
     EGG_ASPECT_RANGE,
     EGG_BODY_HSV,
@@ -49,7 +51,11 @@ class DetectorParams:
 
     body_hsv: HsvRange = EGG_BODY_HSV
     spot_hsv: Mapping[str, tuple[HsvRange, ...]] = field(default_factory=lambda: EGG_SPOT_HSV)
-    basket_hsv: HsvRange = BASKET_HSV
+    basket_hsv: tuple[HsvRange, ...] = BASKET_HSV
+    # Per spot color, the basket ranges to subtract instead of all of basket_hsv (red: only the
+    # part that does not overlap the red spots).
+    basket_for_spot: Mapping[str, tuple[HsvRange, ...]] = field(
+        default_factory=lambda: {"red": BASKET_EXCLUDED_FROM_RED})
     spot_detector: str = EGG_SPOT_DETECTOR  # "hsv" or "edge"
     edge_spot_min_fill: float = EGG_EDGE_SPOT_MIN_FILL
     min_spot_area_px: int = EGG_MIN_SPOT_AREA_PX
@@ -75,10 +81,14 @@ DEFAULT_PARAMS = DetectorParams()
 
 @dataclass(frozen=True)
 class FrameMasks:
-    """Basket-free masks of one frame: the component mask and one spot mask per color (0/255)."""
+    """Basket-free masks of one frame: the white body and one spot mask per color (0/255)."""
 
-    components: Any
+    body: Any
     spots: Mapping[str, Any]
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self.body.shape[:2]
 
 
 @dataclass(frozen=True)
@@ -109,13 +119,19 @@ def _in_ranges(cv2: Any, hsv: Any, ranges: tuple[HsvRange, ...]) -> Any:
     return np.bitwise_or.reduce(masks) if masks else np.zeros(hsv.shape[:2], dtype=np.uint8)
 
 
+def _not_basket_for(cv2: Any, hsv: Any, color: str, not_basket: Any, params: DetectorParams) -> Any:
+    ranges = params.basket_for_spot.get(color)
+    return not_basket if ranges is None else cv2.bitwise_not(_in_ranges(cv2, hsv, ranges))
+
+
 def frame_masks(cv2: Any, frame: Any, params: DetectorParams) -> FrameMasks:
-    """HSV thresholds with the pink basket removed from every mask."""
+    """HSV thresholds with the pink basket removed from the body and every spot mask (for red only
+    the basket ranges that do not overlap the red spots)."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    not_basket = cv2.bitwise_not(_in_ranges(cv2, hsv, (params.basket_hsv,)))
-    spots = {color: _in_ranges(cv2, hsv, ranges) & not_basket for color, ranges in params.spot_hsv.items()}
-    components = np.bitwise_or.reduce([_in_ranges(cv2, hsv, (params.body_hsv,)) & not_basket, *spots.values()])
-    return FrameMasks(components=components, spots=spots)
+    not_basket = cv2.bitwise_not(_in_ranges(cv2, hsv, params.basket_hsv))
+    spots = {color: _in_ranges(cv2, hsv, ranges) & _not_basket_for(cv2, hsv, color, not_basket, params)
+             for color, ranges in params.spot_hsv.items()}
+    return FrameMasks(body=_in_ranges(cv2, hsv, (params.body_hsv,)) & not_basket, spots=spots)
 
 
 def spot_blobs(cv2: Any, masks: FrameMasks, params: DetectorParams) -> tuple[SpotBlob, ...]:
@@ -149,8 +165,9 @@ def _cluster(spots: tuple[SpotBlob, ...], core_factor: float) -> SpotCluster:
 def cluster_spots(
     blobs: tuple[SpotBlob, ...], factor: float = EGG_SPOT_CLUSTER_FACTOR, core_factor: float = EGG_CORE_SPOT_FACTOR
 ) -> tuple[SpotCluster, ...]:
-    """Single-linkage clusters: two spots link when their centers are closer than factor x the
-    larger diameter. Pure; largest total spot area first."""
+    """Single-linkage clusters: two spots of the same color link when their centers are closer
+    than factor x the larger diameter (an egg has one spot color, so red-looking basket pixels
+    never join a green egg). Pure; largest total spot area first."""
     parent = list(range(len(blobs)))
 
     def root(index: int) -> int:
@@ -161,7 +178,9 @@ def cluster_spots(
     for i, first in enumerate(blobs):
         for j in range(i + 1, len(blobs)):
             second = blobs[j]
-            if math.dist((first.cx, first.cy), (second.cx, second.cy)) < factor * max(first.diameter, second.diameter):
+            reach = factor * max(first.diameter, second.diameter)
+            near = math.dist((first.cx, first.cy), (second.cx, second.cy)) < reach
+            if near and first.color == second.color:
                 parent[root(j)] = root(i)
     groups: dict[int, tuple[SpotBlob, ...]] = {}
     for index, blob in enumerate(blobs):

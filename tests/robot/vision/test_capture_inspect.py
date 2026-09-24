@@ -26,12 +26,12 @@ EGG = EggDetection(cx=0.5, cy=0.55, w=0.4, h=0.6, color="green", spots=3, area_p
 STAMP_TIME = time.strptime("2026-09-24 12:34:56", "%Y-%m-%d %H:%M:%S")
 
 
-def egg_image():
+def egg_image(spot_bgr=(40, 160, 60)):
     """An egg with the measured proportions (spot diameter ~1/4 of the egg height)."""
     frame = np.full((480, 640, 3), (40, 70, 110), dtype=np.uint8)
     cv2.ellipse(frame, (320, 250), (130, 100), 0, 0, 360, (245, 245, 245), -1)
     for center in ((250, 255), (390, 240), (320, 190), (320, 305), (325, 250)):
-        cv2.circle(frame, center, 25, (40, 160, 60), -1)
+        cv2.circle(frame, center, 25, spot_bgr, -1)
     return frame
 
 
@@ -94,9 +94,9 @@ class InspectToolTests(unittest.TestCase):
 
     def test_rgb_flag_swaps_channels_first(self):
         image = self.folder / "screenshot.png"
-        cv2.imwrite(str(image), egg_image()[..., ::-1])  # RGB-ordered, like an old screenshot
-        self.assertNotIn("green egg", self.run_tool(image)[1])
-        self.assertIn("1: green egg", self.run_tool(image, "--rgb")[1])
+        cv2.imwrite(str(image), egg_image((40, 40, 220))[..., ::-1])  # red spots, RGB-ordered like an old screenshot
+        self.assertNotIn("red egg", self.run_tool(image)[1])  # read as BGR the spots look blue
+        self.assertIn("1: red egg", self.run_tool(image, "--rgb")[1])
 
     def test_unreadable_image(self):
         self.assertEqual(self.run_tool(self.folder / "missing.png")[0], 2)

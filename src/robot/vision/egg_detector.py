@@ -4,8 +4,9 @@ Eggs are white ellipsoids with green, blue, or red spots (owner decision, 2026-0
 alone is not enough: under strong light, glints on the tarp wrinkles are just as white (robot run
 2026-09-24, capture 20260924-223853). So the spots anchor the search (egg_masks.py): spot blobs
 are clustered by proximity, and each cluster's median spot diameter d sets the scale. Inside a
-window around the cluster, the basket-free body+spot mask is closed (bridging the shell's crack)
-and opened with a kernel of about d / 2, which removes glints thinner than half a spot. The
+window around the cluster, the basket-free body OR the cluster's own spot color is closed
+(bridging the shell's crack) and opened with a kernel of about d / 2, which removes glints
+thinner than half a spot. The
 component holding the cluster's spots is then gap-repaired and must pass the shape rules: area,
 bbox aspect, scale (bbox height / d), solidity, ellipse fill (away from the frame border), and
 enough spot pixels (count and fraction of the egg area).
@@ -95,7 +96,9 @@ def _segment(cv2: Any, masks: FrameMasks, cluster: SpotCluster, window: tuple[in
     KERNEL_MAX_PX; the chosen component is scaled back and intersected with the full-res mask.
     """
     wx, wy, ww, wh = window
-    full = masks.components[wy:wy + wh, wx:wx + ww]
+    colors = {spot.color for spot in cluster.core}  # one color per cluster: other colors stay out
+    full = np.bitwise_or.reduce([masks.body[wy:wy + wh, wx:wx + ww],
+                                 *(masks.spots[color][wy:wy + wh, wx:wx + ww] for color in sorted(colors))])
     open_px = params.open_spot_factor * cluster.d_med
     scale = max(1, math.ceil(open_px / KERNEL_MAX_PX))
     small = cv2.resize(full, (max(1, ww // scale), max(1, wh // scale)), interpolation=cv2.INTER_NEAREST)
@@ -176,7 +179,7 @@ def _spot_counts(cv2: Any, masks: FrameMasks, inside: Any, window: tuple[int, in
 
 
 def _candidate(cv2: Any, masks: FrameMasks, cluster: SpotCluster, params: DetectorParams) -> Candidate:
-    window = _window(cluster, masks.components.shape, params)
+    window = _window(cluster, masks.shape, params)
     base = Candidate(cluster_spots=len(cluster.core), d_med=cluster.d_med, window=window)
     if cluster.d_med < params.min_spot_diameter_px:
         return replace(base, rejected="spot size")
@@ -185,7 +188,7 @@ def _candidate(cv2: Any, masks: FrameMasks, cluster: SpotCluster, params: Detect
         return replace(base, rejected="no component")
     wx, wy = window[:2]
     x, y, w, h = cv2.boundingRect(cv2.findNonZero(component.astype(np.uint8)))
-    height, width = masks.components.shape
+    height, width = masks.shape
     margin = params.border_margin_px
     touches = wx + x < margin or wy + y < margin or wx + x + w > width - margin or wy + y + h > height - margin
     measured = replace(base, x=wx + x, y=wy + y, w=w, h=h, area_px=int(component.sum()), aspect=w / h,
