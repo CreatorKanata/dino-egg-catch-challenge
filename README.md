@@ -15,6 +15,7 @@ This repository contains planning documents, SO101 reference models, custom CAD 
 | --- | --- |
 | [src/robot/](src/robot/README.md) | SO-ARM101 and LeKiwi control, integration, and operating modes |
 | [src/dino-controller/](src/dino-controller/README.md) | ESP32 Arduino joystick, RGB, rotary encoder, and shaft-button firmware |
+| [docs/project-status.md](docs/project-status.md) | Current status, daily commands, recording and training, the venue checklist, and the road to Full Self-Catching |
 | [docs/spec/](docs/spec/) | Settled specifications: [operating modes and KachiButton controls](docs/spec/operating-modes.md) |
 | [docs/proposals/](docs/proposals/) | Design proposals not yet decided: [Gemini Robotics ER 2 integration](docs/proposals/dino-egg-catch-challenge-gemini-integration.md) |
 | [docs/lekiwi-app-development.md](docs/lekiwi-app-development.md) | How application code uses the LeKiwi robot through the LeRobot fork, and where training lives |
