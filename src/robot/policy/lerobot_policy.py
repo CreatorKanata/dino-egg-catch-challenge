@@ -103,6 +103,8 @@ def load_with_fallback(checkpoint: Any, build: Build, path: str, device: str, ho
 def load_lerobot_policy(path: str, device: str, horizon: int, ensemble_coeff: float | None = None) -> LoadedPolicy:
     """The checkpoint at `path` ready for inference on `device` ("auto" resolved here)."""
     import torch
+    import lerobot.policies  # noqa: F401  registers the policy config types ('act', ...) that
+    # PreTrainedConfig.from_pretrained resolves; without it the lazy load fails with "not registered".
     from lerobot.configs.policies import PreTrainedConfig
 
     resolved = resolve_device(device, torch.backends.mps.is_available)
