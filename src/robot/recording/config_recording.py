@@ -11,13 +11,13 @@ from typing import Final
 from robot.config import ARM_ENGAGE_SPEED_DEG_S
 
 # --- Session defaults (CLI flags) ----------------------------------------------------------
-DEFAULT_REPO_ID: Final = "CreatorKanata/dino_pick_egg"
+DEFAULT_REPO_ID: Final = "CreatorKanata/dino_pick_egg_v2"  # v2: recorded with the 30 fps camera controls; v1 (20 green episodes, ~8 fps wrist) stays on the Hub
 DEFAULT_NUM_EPISODES: Final = 60
 DEFAULT_EPISODE_TIME_S: Final = 20.0
 DEFAULT_RESET_TIME_S: Final = 15.0
 DEFAULT_FPS: Final = 30
 DEFAULT_TASK: Final = "Pick up the egg with the mouth"
-EGG_COLORS: Final = ("green", "red", "orange")
+EGG_COLORS: Final = ("green", "red", "yellow", "orange")  # yellow: painted egg planned 2026-09-25; orange kept for compatibility
 
 # --- Start-pose gate (before every episode) ------------------------------------------------
 GATE_TOLERANCE_DEG: Final = 10.0  # every non-gripper leader joint within this of the catch pose
