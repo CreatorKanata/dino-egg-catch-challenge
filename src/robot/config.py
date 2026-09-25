@@ -25,9 +25,8 @@ ZMQ_CMD_PORT: Final = 5555  # LeKiwiClientConfig.port_zmq_cmd
 ZMQ_OBSERVATION_PORT: Final = 5556  # LeKiwiClientConfig.port_zmq_observations
 
 # --- dino-controller (USB serial, JSON protocol v0) ----------------------------------------
-# Port used in the owner's Manual Mode session on the robot (2026-09-24; the firmware docs
-# record the earlier /dev/cu.usbserial-110). Override with --controller-port when the Mac
-# assigns a different device name.
+# Port from the owner's Manual Mode session (2026-09-24; the firmware docs record the earlier
+# /dev/cu.usbserial-110). Override with --controller-port when the Mac assigns another name.
 CONTROLLER_SERIAL_PORT: Final = "/dev/cu.usbserial-11130"
 CONTROLLER_BAUD: Final = 115200
 # Longest emitted frame including LF (docs/dino-controller-protocol.md, "Frame buffer").
@@ -35,9 +34,8 @@ CONTROLLER_LINE_MAX_BYTES: Final = 255
 # No valid controller line for this long -> input lost -> zero velocities. This is the
 # application's primary stop; the host's 500 ms command watchdog is only the backstop.
 CONTROLLER_INPUT_TIMEOUT_S: Final = 0.5
-# The firmware is silent while inputs are unchanged, so the reader sends `STATE` at this
-# interval. Replies keep the timeout above meaningful and also retry resynchronization.
-# Must stay well below CONTROLLER_INPUT_TIMEOUT_S.
+# The firmware is silent while inputs are unchanged, so the reader sends `STATE` at this interval
+# (replies keep the timeout meaningful and retry resync). Well below CONTROLLER_INPUT_TIMEOUT_S.
 CONTROLLER_STATE_POLL_INTERVAL_S: Final = 0.2
 
 # --- Overhead camera on the Mac --------------------------------------------------------------
@@ -91,16 +89,17 @@ ARM_KEYS: Final = (
 )
 # The leader arm (SO100Leader.get_action) reports the same joints without the `arm_` prefix.
 LEADER_KEYS: Final = tuple(key.removeprefix("arm_") for key in ARM_KEYS)
+# Extra action key read by the fork's host (LeKiwi.send_action): 0.0 releases the arm torque,
+# 1.0 (or absent) keeps it on; upstream hosts ignore it.
+ARM_TORQUE_KEY: Final = "arm_torque"
 
 # --- Leader arm on the Mac (Manual Mode puppeteering) -------------------------------------
-# Verified values from docs/lekiwi-app-development.md (working session 2026-09-24). The
-# calibration file dino_leader_arm.json lives in
-# ~/.cache/huggingface/lerobot/calibration/teleoperators/so_leader/.
+# Verified values from docs/lekiwi-app-development.md (2026-09-24); calibration dino_leader_arm.json
+# lives in ~/.cache/huggingface/lerobot/calibration/teleoperators/so_leader/.
 LEADER_ARM_PORT: Final = "/dev/tty.usbmodem5A7A0179021"
 LEADER_ARM_ID: Final = "dino_leader_arm"
-# Slow engagement (owner decision: approach slowly, then follow in real time). The numbers are
-# proposals to tune on the robot, not measurements. Joint keys are in degrees; the gripper key
-# is in percent, and the same numeric rate/tolerance is applied to it (percent per second).
+# Slow engagement (owner decision: approach slowly, then follow in real time); proposals to tune on
+# the robot. Joints in degrees; the gripper in percent with the same numeric rate/tolerance (%/s).
 ARM_ENGAGE_SPEED_DEG_S: Final = 30.0
 ARM_ENGAGE_TOLERANCE_DEG: Final = 3.0
 
@@ -139,9 +138,8 @@ SHAFT_BUTTON_ROLE: ShaftButtonRole = ROLE_NONE
 # spent at the current level's theta speed (open-loop: commanded, not measured).
 # Owner decision 2026-09-24: the base turns half the knob angle per click; 1.0 would be 1:1.
 ENCODER_ROTATION_SCALE: Final = 0.5
-# Placeholder for a typical 20-detent module. Replace it with the counted test described in
-# docs/dino-controller-encoder.md ("Detent calibration" is still pending in
-# docs/dino-controller-validation.md).
+# Placeholder for a typical 20-detent module; replace it with the counted test in
+# docs/dino-controller-encoder.md ("Detent calibration" is pending in docs/dino-controller-validation.md).
 ENCODER_CLICKS_PER_REVOLUTION: Final = 20
 # Derived, never set by hand: 20 detents x 0.5 -> 9 degrees per click.
 ENCODER_DEGREES_PER_STEP: Final = 360.0 / ENCODER_CLICKS_PER_REVOLUTION * ENCODER_ROTATION_SCALE
@@ -162,8 +160,7 @@ class SignboardTheme:
     basket: tuple[int, int, int]
 
 
-# Placeholder Jurassic palette; artwork (wood-sign frames, fonts, footprint icons) comes later
-# as image assets.
+# Placeholder Jurassic palette; artwork (wood-sign frames, fonts, icons) comes later as image assets.
 DEFAULT_THEME: Final = SignboardTheme(
     background=(18, 38, 24),  # dark jungle green
     frame=(92, 64, 32),  # earthy brown
@@ -190,8 +187,10 @@ SIGNBOARD_CHILD_POLL_S: Final = 0.05  # child waits this long for a packet befor
 SIGNBOARD_CHILD_EXIT_TIMEOUT_S: Final = 2.0  # parent waits this long for the child to exit
 
 # --- KachiButton phrases (typed into the focused signboard window; docs/spec/operating-modes.md) --
-# (typed phrase, command). Matching is exact and case-sensitive, including spaces and "!".
-KACHI_PHRASES: Final = (("Go Go!", "mode_toggle"), ("Hi!", "hi"), ("Thx", "thx"), ("Stop", "stop"))
+# (typed phrase, command). Matching is exact and case-sensitive, including spaces and "!". Stop unit
+# (second KachiButton, typed text unconfirmed: both spellings): STOP, OFF (arm torque off), MODE (to Manual).
+KACHI_PHRASES: Final = (("Go Go!", "mode_toggle"), ("Hi!", "hi"), ("Thx", "thx"), ("Stop", "stop"), ("STOP", "stop"),
+                        ("OFF", "torque_off"), ("Off", "torque_off"), ("MODE", "mode_manual"), ("Mode", "mode_manual"))
 KACHI_PHRASE_GAP_S: Final = 1.0  # characters further apart than this never form one phrase
 KACHI_BUFFER_MAX: Final = 32  # trailing characters kept while waiting for a phrase to complete
 NOTICE_SECONDS: Final = 3.0  # how long a signboard notice ("STOP", "not available yet") stays

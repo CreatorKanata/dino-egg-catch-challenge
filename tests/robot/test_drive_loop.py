@@ -2,8 +2,9 @@
 
 Fake devices stand in for the controller, robot, leader arm, camera, and signboard
 (DisplaySink), so the wiring (action sent before viewing, KachiButton commands folded in,
-Stop and mode switches zeroing the base, leader poses reaching send_action once engaged, the
-Pi frames converted to BGR, and ESC/close or a dead signboard ending the loop) is verified
+Stop, arm torque off, MODE (re-reading the held pose), and mode switches zeroing the base,
+leader poses reaching send_action once engaged, the Pi frames converted to BGR, and ESC/close
+or a dead signboard ending the loop) is verified
 without hardware. The egg and basket detectors are patched out, so OpenCV is never loaded here;
 Auto Catch wiring is in test_drive_loop_auto_catch.py, Auto Release in test_drive_loop_release.py. Skipped when LeRobot is unavailable.
 """
@@ -38,6 +39,7 @@ from robot.arm_follow import ArmFollowState
 from robot.config import ARM_KEYS, ENCODER_DEGREES_PER_STEP, LOOP_HZ, SPEED_LEVELS, TOP_CAMERA_KEY
 from robot.drive_state import DriveState
 from robot.manual_mode import LoopState
+from robot.mode_manager import AppState
 
 
 def devices(reader, view, camera=None, leader=None):
@@ -150,27 +152,52 @@ class ManualModeStepTests(unittest.TestCase):
         self.assertEqual((state.app.stopped, state.arm_status), (True, "holding"))
         self.assertEqual(view.rendered[0][2].notice, "STOP")
 
-    def test_base_stays_zero_while_stopped_until_go_go(self):
+    def test_base_stays_zero_while_stopped_until_mode(self):
         leader = FakeLeader(NEAR)
         view = FakeView(keep_running=True, commands=("stop",))
         parts = devices(FakeReader(FORWARD, delta=1), view, leader=leader)
         state, _, _ = step(parts, DRIVING, None)
-        for command in ((), ("hi",), ("thx",), ()):  # several stopped frames, joystick and encoder active
+        for command in ((), ("hi",), ("thx",), ("mode_toggle",)):  # stopped frames, joystick and encoder active
             view.commands = command
             state, keep_running, _ = step(parts, state, 0.0)
             self.assertTrue(keep_running and state.app.stopped)
             self.assertEqual(state.drive.pending_rotation_deg, 0.0)
         self.assertEqual(parts.adapter.sent, [ZEROS] * 5)
         self.assertEqual(parts.adapter.arms, [HOLD] * 5)
+        self.assertEqual(parts.adapter.torques, [True] * 5)  # STOP keeps the arm torque on
         self.assertEqual(leader.reads, 0)
         status = view.rendered[-1][2]
         self.assertTrue(status.stopped)
-        view.commands = ("mode_toggle",)  # resume: one more zero frame, arm disengaged
+        view.commands = ("mode_manual",)  # resume: one more zero frame, arm disengaged
         state, _, _ = step(parts, state, 0.0)
+        self.assertEqual(parts.adapter.captured, [])  # torque stayed on: the hold is not re-read
         self.assertEqual((state.app.mode, state.app.stopped, parts.adapter.sent[-1]), ("manual", False, ZEROS))
         state, _, _ = step(parts, state, 0.0)
         self.assertAlmostEqual(parts.adapter.sent[-1]["x.vel"], 0.1)
         self.assertEqual(state.arm_status, "following")
+
+    def test_torque_off_then_mode_recaptures_the_hold(self):
+        leader = FakeLeader(NEAR)
+        view = FakeView(keep_running=True, commands=("torque_off",))
+        parts = devices(FakeReader(FORWARD, delta=1), view, leader=leader)
+        moved = {key: 40.0 for key in ARM_KEYS}  # the arm was moved by hand while limp
+        parts.adapter.pose = moved
+        state, keep_running, _ = step(parts, replace(DRIVING, follow=ArmFollowState(engaged=True)), None)
+        self.assertTrue(keep_running)
+        self.assertEqual((parts.adapter.sent, parts.adapter.arms, parts.adapter.torques), ([ZEROS], [HOLD], [False]))
+        self.assertEqual((state.app.stopped, state.app.torque_off, state.arm_status), (True, True, "torque off"))
+        self.assertEqual(leader.reads, 0)
+        status = view.rendered[-1][2]
+        self.assertEqual((status.torque_off, status.notice, status.arm_status), (True, "TORQUE OFF", "torque off"))
+        view.commands = ("mode_manual",)
+        state, _, _ = step(parts, state, None)  # dt = 0: the slow approach has not moved the arm yet
+        self.assertEqual(len(parts.adapter.captured), 1)
+        self.assertEqual({key: parts.adapter.captured[0][key] for key in ARM_KEYS}, moved)
+        self.assertEqual((parts.adapter.sent[-1], parts.adapter.arms[-1], parts.adapter.torques[-1]),
+                         (ZEROS, moved, True))
+        self.assertEqual(replace(state.app, notice="", notice_until=0.0), AppState())
+        self.assertFalse(state.follow.engaged)
+        self.assertEqual(state.arm_status, "syncing")  # the leader (NEAR) is approached slowly from `moved`
 
     def test_mode_toggle_zeros_base_in_fsc_and_holds_arm(self):
         leader = FakeLeader(NEAR)

@@ -1,17 +1,21 @@
 """tests/robot/test_lekiwi_adapter.py: Hardware-free checks of the LeKiwi adapter's action content.
 
 The fork's host rejects actions without arm keys, so every command must carry exactly the six
-held arm positions plus the three base velocities. A fake client replaces LeKiwiClient.
+held arm positions plus the three base velocities, plus the fork's `arm_torque` flag (1.0 keeps the
+arm torque on, 0.0 releases it). capture_hold re-reads the held pose from an observation (after
+arm torque off). A fake client replaces LeKiwiClient.
 """
 
 import unittest
 
-from robot.config import ARM_KEYS
+from robot.config import ARM_KEYS, ARM_TORQUE_KEY
 from robot.lekiwi_adapter import LeKiwiAdapter, capture_arm_pose, compose_action
 
 BASE_KEYS = {"x.vel", "y.vel", "theta.vel"}
 POSE = {key: float(index) for index, key in enumerate(ARM_KEYS)}
 OBSERVATION = {**POSE, "x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0, "front": object()}
+ZEROS = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
+TORQUE_ON = {ARM_TORQUE_KEY: 1.0}
 
 
 class FakeClient:
@@ -74,8 +78,9 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(adapter.arm_hold, POSE)
         adapter.send_action({"x.vel": 0.2, "y.vel": 0.0, "theta.vel": 0.0})
         self.assertEqual(len(client.sent), 1)
-        self.assertEqual(set(client.sent[0]), set(ARM_KEYS) | BASE_KEYS)
+        self.assertEqual(set(client.sent[0]), set(ARM_KEYS) | BASE_KEYS | {ARM_TORQUE_KEY})
         self.assertEqual({key: client.sent[0][key] for key in ARM_KEYS}, POSE)
+        self.assertEqual(client.sent[0][ARM_TORQUE_KEY], 1.0)
 
     def test_connect_without_arm_pose_fails(self):
         client = FakeClient(observation={"x.vel": 0.0})
@@ -92,7 +97,7 @@ class AdapterTests(unittest.TestCase):
         adapter.connect()
         adapter.disconnect()
         self.assertFalse(client.is_connected)
-        self.assertEqual(client.sent[-1], {**POSE, "x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0})
+        self.assertEqual(client.sent[-1], {**POSE, **ZEROS, **TORQUE_ON})
 
     def test_send_with_arm_pose_updates_the_held_pose(self):
         client = FakeClient()
@@ -107,11 +112,42 @@ class AdapterTests(unittest.TestCase):
         adapter.send_action({"x.vel": 0.1, "y.vel": 0.0, "theta.vel": 0.0})  # None -> repeat held pose
         self.assertEqual({key: client.sent[-1][key] for key in ARM_KEYS}, leader)
         adapter.stop()
-        self.assertEqual(client.sent[-1], {**leader, "x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0})
+        self.assertEqual(client.sent[-1], {**leader, **ZEROS, **TORQUE_ON})
 
     def test_send_with_arm_pose_before_connect_raises(self):
         with self.assertRaises(RuntimeError):
             make_adapter(FakeClient()).send_action({"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}, POSE)
+
+    def test_arm_torque_flag(self):
+        client = FakeClient()
+        adapter = make_adapter(client)
+        adapter.connect()
+        adapter.send_action(ZEROS, arm_torque=False)
+        self.assertEqual(client.sent[-1], {**POSE, **ZEROS, ARM_TORQUE_KEY: 0.0})
+        self.assertIs(type(client.sent[-1][ARM_TORQUE_KEY]), float)
+        adapter.stop(arm_torque=False)
+        self.assertEqual(client.sent[-1][ARM_TORQUE_KEY], 0.0)
+        adapter.stop()
+        self.assertEqual(client.sent[-1][ARM_TORQUE_KEY], 1.0)
+
+    def test_capture_hold_replaces_the_held_pose(self):
+        client = FakeClient()
+        adapter = make_adapter(client)
+        adapter.connect()
+        startup = adapter.arm_hold
+        moved = {key: value + 5.0 for key, value in POSE.items()}
+        adapter.capture_hold({**OBSERVATION, **moved})
+        self.assertEqual((adapter.arm_hold, startup), (moved, POSE))  # reassigned, not mutated
+        adapter.send_action(ZEROS)
+        self.assertEqual({key: client.sent[-1][key] for key in ARM_KEYS}, moved)
+
+    def test_capture_hold_keeps_the_old_hold_on_a_bad_observation(self):
+        adapter = make_adapter(FakeClient())
+        adapter.connect()
+        for observation in ({"x.vel": 0.0}, {**OBSERVATION, "arm_gripper.pos": "n/a"}):
+            with self.subTest(observation=observation), self.assertLogs("robot.lekiwi_adapter", "ERROR"):
+                adapter.capture_hold(observation)
+            self.assertEqual(adapter.arm_hold, POSE)
 
     def test_stop_and_disconnect_are_safe_when_not_connected(self):
         client = FakeClient()

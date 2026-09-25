@@ -1,7 +1,7 @@
 """src/robot/signboard_layout.py: Pure layout and status text for the attendee signboard.
 
 Computes where the three camera views and the status bar go, where a normalized overlay lands
-inside a letterboxed camera view, and what the status bar says (mode or STOPPED, with the Auto
+inside a letterboxed camera view, and what the status bar says (mode, STOPPED, or TORQUE OFF, with the Auto
 Catch phase or the Auto Release playback progress; the resume hint, a notice, the release recording time, the FSC voice
 hint, or the drive status; arm status with speed and directions),
 using only the stdlib (own Rect, not pygame.Rect) so it is unit-tested without a display.
@@ -26,6 +26,7 @@ ARM_TEXT = {
     "no leader": "no leader arm",
     "auto release": "arm auto release",
     "auto catch": "arm auto catch",
+    "torque off": "arm torque off",
 }
 # Auto Catch phase on the mode line ("MANUAL - AUTO CATCH: to catch pose"; "picking 4 s" with the
 # pick time); the stub is instantaneous.
@@ -34,7 +35,8 @@ PHASE_TEXT = {"to_start": "to start pose", "align": "aligning", "to_catch": "to 
 SEPARATOR = "  |  "
 VOICE_TEXT = "mic on"
 STOPPED_TEXT = "STOPPED"
-RESUME_HINT = "Press Go Go! to resume"
+TORQUE_OFF_TEXT = "TORQUE OFF"
+RESUME_HINT = "Press MODE to resume"
 FSC_TALK_HINT = "Press Hi! to talk"
 FSC_LISTENING_HINT = "Listening... (Hi! to end)"
 RECORDING_TEXT = "REC release {seconds} s"
@@ -138,6 +140,8 @@ def overlay_points(overlay: Overlay, fit_rect: Rect, count: int = 48) -> tuple[t
 
 
 def _mode_text(status: DisplayStatus) -> str:
+    if status.torque_off:
+        return TORQUE_OFF_TEXT
     if status.stopped:
         return STOPPED_TEXT
     action = ACTION_TEXT[status.action]
@@ -201,7 +205,7 @@ def status_lines(
     glyphs: Glyphs = UNICODE_GLYPHS,
     status: DisplayStatus = DisplayStatus(),
 ) -> tuple[str, str, str]:
-    """Three lines: the mode or STOPPED (large); see _second_line; then the arm status, FSC
+    """Three lines: the mode, STOPPED, or TORQUE OFF (large); see _second_line; then the arm status, FSC
     voice input, speed footprints (level fixed by config), and held directions plus rotation.
     """
     details = (
@@ -216,7 +220,7 @@ def status_lines(
 def status_color(
     drive: DriveState, theme: SignboardTheme, status: DisplayStatus = DisplayStatus()
 ) -> tuple[int, int, int]:
-    """Warning while stopped, for a warning notice (rejected Auto Catch, egg lost), while the release
+    """Warning while stopped (including torque off), for a warning notice (rejected Auto Catch, egg lost), while the release
     motion is recorded, or (Manual Mode) when input is lost; accent while Catch is requested."""
     if status.stopped or (status.notice and status.notice_level == "warning") or status.recording_s is not None:
         return theme.warning

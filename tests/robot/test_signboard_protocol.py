@@ -60,7 +60,7 @@ class ProtocolTests(unittest.TestCase):
                                             "notice": "Listening...", "arm_status": "leader fault",
                                             "stopped": False, "notice_level": "info", "recording_s": None,
                                             "progress": None, "phase": "", "phase_s": None,
-                                            "overlays": []})
+                                            "torque_off": False, "overlays": []})
         self.assertEqual(fields["frames"], [{"name": "top", "w": 4, "h": 3}, {"name": "front", "w": 0, "h": 0}])
         self.assertEqual(body, FRAME.tobytes())
 
@@ -104,6 +104,7 @@ class ProtocolTests(unittest.TestCase):
             "bad notice": json.dumps({**good, "status": {**good["status"], "notice": None}}).encode() + b"\n",
             "long notice": json.dumps({**good, "status": {**good["status"], "notice": "x" * 999}}).encode() + b"\n",
             "bad stopped": json.dumps({**good, "status": {**good["status"], "stopped": "no"}}).encode() + b"\n",
+            "bad torque off": json.dumps({**good, "status": {**good["status"], "torque_off": 1}}).encode() + b"\n",
             "bad arm status": json.dumps({**good, "status": {**good["status"], "arm_status": "on"}}).encode() + b"\n",
             "unknown type": b'{"v": 1, "type": "reset"}\n',
             "command on stdin": encode_command("stop"),
@@ -173,6 +174,10 @@ class ProtocolTests(unittest.TestCase):
                 self.assertIsNone(read_packet(io.BytesIO(line)))
         missing = {key: value for key, value in good["status"].items() if key != "progress"}
         self.assertIsNone(read_packet(io.BytesIO(json.dumps({**good, "status": missing}).encode() + b"\n")))
+
+    def test_torque_off_round_trips(self):
+        status = replace(STATUS, stopped=True, torque_off=True, arm_status="torque off", notice="TORQUE OFF")
+        self.assertEqual(read_packet(io.BytesIO(encode(DisplayPacket(DRIVE, CONTROLLER, (), status)))).status, status)
 
     def test_default_status_round_trip(self):
         plain = DisplayPacket(drive=DRIVE, controller=CONTROLLER, frames=())

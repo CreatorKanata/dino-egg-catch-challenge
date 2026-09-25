@@ -1,9 +1,11 @@
 """src/robot/mode_manager.py: Operating-mode state and KachiButton command rules.
 
 Pure and stdlib-only. Implements the decisions in docs/spec/operating-modes.md, section 2:
-`Stop` is a full stop and reset in every mode and latches a stopped state that only `Go Go!`
-releases (back to Manual Mode); otherwise `Go Go!` toggles Manual Mode and FSC with zero base
-velocities first, and presses are ignored while an automatic action runs. `Hi!` in Manual Mode
+the stop unit's `STOP` is a full stop and reset in every mode and latches a stopped state (the arm
+torque stays as it was); `OFF` does the same and also releases the arm torque (torque_off implies
+stopped); `MODE` works in every state and is the only way out: back to Manual Mode, latch
+released, torque on. `Go Go!` toggles Manual Mode and FSC with zero base velocities first; it and
+the other presses are ignored while stopped or while an automatic action runs. `Hi!` in Manual Mode
 checks the egg size and the recorded catch and release poses (start_auto_catch) and starts Auto
 Catch (auto_catch.py: alignment, catch pose, wrist check, the pick policy or its stub, release
 pose); `Thx` checks the basket size and the recorded home pose and release motion
@@ -23,6 +25,7 @@ MODES: Final = ("manual", "fsc")
 ACTIONS: Final = ("none", "auto_catch", "auto_release")
 
 NOTICE_STOP: Final = "STOP"
+NOTICE_TORQUE_OFF: Final = "TORQUE OFF"
 NOTICE_MODE: Final = {"manual": "MANUAL", "fsc": "FSC"}
 NOTICE_BASKET_SIZE: Final = {"none": "Basket not in view", "too_small": "Basket too far"}
 NOTICE_NO_HOME: Final = "Home pose not recorded"
@@ -72,7 +75,7 @@ NOTICE_LEVELS: Final = ("info", "warning")
 @dataclass(frozen=True)
 class AppState:
     """Current mode, running action and its state (Auto Catch, Auto Release), FSC voice input,
-    notice, and the Stop flag."""
+    notice, the Stop flag, and the arm torque off flag (torque_off implies stopped)."""
 
     mode: Mode = "manual"
     action: Action = "none"
@@ -83,6 +86,7 @@ class AppState:
     notice_level: NoticeLevel = "info"
     catch: CatchState = CatchState()
     release: ReleaseState = ReleaseState()
+    torque_off: bool = False
 
 
 @dataclass(frozen=True)
@@ -101,22 +105,27 @@ def with_notice(
     return replace(state, notice=notice, notice_until=now + notice_s, notice_level=level)
 
 
-def _stop(now: float, notice_s: float) -> Transition:
-    state = with_notice(AppState(stopped=True), NOTICE_STOP, now, notice_s)
-    return Transition(state=state, stop_base=True, disengage_arm=True)
+def _stop(state: AppState, now: float, notice_s: float) -> Transition:
+    """Reset and latch; only OFF and MODE change the arm torque, so a released arm stays released."""
+    stopped = with_notice(AppState(stopped=True, torque_off=state.torque_off), NOTICE_STOP, now, notice_s)
+    return Transition(state=stopped, stop_base=True, disengage_arm=True)
+
+
+def _torque_off(state: AppState, now: float, notice_s: float) -> Transition:
+    released = with_notice(AppState(stopped=True, torque_off=True), NOTICE_TORQUE_OFF, now, notice_s)
+    return Transition(state=released, stop_base=True, disengage_arm=True)
+
+
+def _mode_manual(state: AppState, now: float, notice_s: float) -> Transition:
+    """Back to a fresh Manual Mode: cancels any action, releases the latch, arm torque on."""
+    manual = with_notice(AppState(), NOTICE_MODE["manual"], now, notice_s)
+    return Transition(state=manual, stop_base=True, disengage_arm=True)
 
 
 def _toggle_mode(state: AppState, now: float, notice_s: float) -> Transition:
     mode: Mode = "fsc" if state.mode == "manual" else "manual"
     toggled = replace(state, mode=mode, voice_listening=False)
     return Transition(state=with_notice(toggled, NOTICE_MODE[mode], now, notice_s), stop_base=True, disengage_arm=True)
-
-
-def _resume(state: AppState, now: float, notice_s: float) -> Transition:
-    """Release the Stop latch: always back to Manual Mode (never a toggle to FSC)."""
-    resumed = replace(state, mode="manual", voice_listening=False, stopped=False)
-    return Transition(state=with_notice(resumed, NOTICE_MODE["manual"], now, notice_s), stop_base=True,
-                      disengage_arm=True)
 
 
 def _hi(state: AppState, now: float, notice_s: float) -> Transition:
@@ -133,25 +142,24 @@ def _thx(state: AppState, now: float, notice_s: float) -> Transition:
 
 
 _HANDLERS: Final = {"mode_toggle": _toggle_mode, "hi": _hi, "thx": _thx}
+_ALWAYS: Final = {"stop": _stop, "torque_off": _torque_off, "mode_manual": _mode_manual}  # every state
 
 
 def apply_command(state: AppState, command: str, now: float, notice_s: float = NOTICE_SECONDS) -> Transition:
     """Apply one KachiButton command at time `now`; never mutates `state`.
 
-    `stop` always works, latches `stopped`, and cancels any action. While stopped, only
-    `mode_toggle` does anything: it resumes Manual Mode. Other known commands are ignored while
-    an action runs. Unknown commands leave the state unchanged. `hi` and `thx` in Manual Mode are
+    `stop`, `torque_off`, and `mode_manual` always work and cancel any action: `stop` latches
+    `stopped` (keeping `torque_off`), `torque_off` latches `stopped` and `torque_off`, and
+    `mode_manual` resets to Manual Mode with both cleared. While stopped every other command is
+    ignored (`mode_manual` is the only resume); so is every other command while an action runs.
+    Unknown commands leave the state unchanged. `hi` and `thx` in Manual Mode are
     left unchanged here because they need the egg size and the recorded poses (start_auto_catch) or
     the basket and the recorded data (start_auto_release).
     """
-    if command == "stop":
-        return _stop(now, notice_s)
+    if command in _ALWAYS:
+        return _ALWAYS[command](state, now, notice_s)
     handler = _HANDLERS.get(command)
-    if handler is None:
-        return Transition(state=state)
-    if state.stopped:
-        return _resume(state, now, notice_s) if command == "mode_toggle" else Transition(state=state)
-    if state.action != "none":  # a press while an automatic action runs is ignored
+    if handler is None or state.stopped or state.action != "none":  # ignored while stopped or busy
         return Transition(state=state)
     return handler(state, now, notice_s)
 

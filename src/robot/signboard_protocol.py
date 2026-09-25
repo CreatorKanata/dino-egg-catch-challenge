@@ -29,7 +29,7 @@ CHANNELS = 3
 DRIVE_FIELDS = ("speed_index", "catch_requested", "input_lost", "pending_rotation_deg")
 CONTROLLER_FIELDS = ("up", "down", "left", "right", "button", "synchronized")
 STATUS_FIELDS = ("mode", "action", "voice_listening", "notice", "arm_status", "stopped", "notice_level",
-                 "recording_s", "progress", "phase", "phase_s")
+                 "recording_s", "progress", "phase", "phase_s", "torque_off")
 PHASES = ("", *CATCH_PHASES)  # "" = no Auto Catch running
 # Optional status numbers: None or a finite number within these bounds.
 OPTIONAL_BOUNDS = {"recording_s": (0.0, 24 * 3600.0), "progress": (0.0, 1.0), "phase_s": (0.0, 24 * 3600.0)}
@@ -174,7 +174,7 @@ def _overlays(entries: Any) -> tuple[Overlay, ...] | None:
 def _status(fields: Any) -> DisplayStatus | None:
     if not isinstance(fields, dict):
         return None
-    if not all(type(fields.get(key)) is bool for key in ("voice_listening", "stopped")):
+    if not all(type(fields.get(key)) is bool for key in ("voice_listening", "stopped", "torque_off")):
         return None
     notice = fields.get("notice")
     if not isinstance(notice, str) or len(notice) > NOTICE_MAX_CHARS:

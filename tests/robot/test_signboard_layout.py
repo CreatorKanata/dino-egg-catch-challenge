@@ -229,7 +229,14 @@ class StatusTextTests(unittest.TestCase):
     def test_stopped_latch_lines(self):
         stopped = DisplayStatus(mode="fsc", notice="STOP", stopped=True)
         lines = status_lines(replace(DRIVING, input_lost=True), SYNCED, 3, status=stopped)
-        self.assertEqual(lines[:2], ("STOPPED", "Press Go Go! to resume"))
+        self.assertEqual(lines[:2], ("STOPPED", "Press MODE to resume"))
+
+    def test_torque_off_lines_and_color(self):
+        off = DisplayStatus(notice="TORQUE OFF", stopped=True, torque_off=True, arm_status="torque off")
+        lines = status_lines(DRIVING, SYNCED, 3, ASCII_GLYPHS, off)
+        self.assertEqual(lines[:2], ("TORQUE OFF", "Press MODE to resume"))
+        self.assertTrue(lines[2].startswith("arm torque off  |  "), lines[2])
+        self.assertEqual(status_color(DRIVING, DEFAULT_THEME, off), DEFAULT_THEME.warning)
 
     def test_auto_release_progress_recording_and_arm_text(self):
         releasing = DisplayStatus(action="auto_release", arm_status="auto release", progress=0.456)

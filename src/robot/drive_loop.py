@@ -1,7 +1,8 @@
 """src/robot/drive_loop.py: One Manual Mode control-loop iteration and the fixed-rate loop.
 
 Polls the controller and the KachiButton commands, reads the leader arm, decides the base
-action and arm pose (manual_mode.py, including a running Auto Catch or Auto Release), sends them,
+action and arm pose (manual_mode.py, including a running Auto Catch or Auto Release), sends them
+with the arm torque flag (off while the stop unit's OFF holds; the hold is re-read on leaving it),
 applies the staff keys (save home or catch pose, record the release motion; arm_store.py), then
 observes: the Pi frames are converted to BGR, the 16:9 overhead frame is downscaled once, the egg
 and basket detectors run on the front frame in Manual Mode outside the arm-only action phases (their results drive the next frame's
@@ -181,10 +182,12 @@ def _next_state(
     follow = disengaged() if folded.disengage_arm else state.follow
     drive = update_drive_state(state.drive, controller, encoder_delta, stale, dt)
     auto_arm = catch_arm if catch_arm is not None else release_arm
+    if state.app.torque_off and not folded.app.torque_off and state.observation is not None:
+        devices.adapter.capture_hold(state.observation)  # moved by hand while limp: _plan_arm reads the new hold
     arm_cmd, follow, arm_status = _plan_arm(devices, folded.app, follow, auto_arm, dt)
     drive, base = plan_base(drive, controller, folded.app, folded.stop_base,
                             catch_base if catch_base is not None else release_base)
-    devices.adapter.send_action(base, arm_cmd)
+    devices.adapter.send_action(base, arm_cmd, arm_torque=not folded.app.torque_off)
     app, recording = handle_staff_keys(folded.app, state.recording, commands, arm_cmd, arm_status, now,
                                        devices.arm_paths)
     aligning = folded.app.action == "auto_catch" and folded.app.catch.phase == "align"

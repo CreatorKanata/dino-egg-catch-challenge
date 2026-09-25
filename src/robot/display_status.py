@@ -1,6 +1,6 @@
 """src/robot/display_status.py: What the signboard shows about modes, the arm, and the egg, as data.
 
-A frozen DisplayStatus (including the Auto Catch phase and pick time for the mode line) travels from the control loop to the signboard child over the pipe
+A frozen DisplayStatus (including the Auto Catch phase, pick time, and arm torque off flag for the mode line) travels from the control loop to the signboard child over the pipe
 (signboard_protocol.py) and is turned into status text by signboard_layout.py. Overlays are
 normalized shapes drawn on a camera view: the Auto Catch target (the egg-shaped guide on the
 front view), the best egg detection, the pink basket (a rectangle), and, only while Auto Release
@@ -19,8 +19,10 @@ from robot.vision.basket_size import BasketDetection
 from robot.vision.config_vision import RELEASE_TARGET_CX, RELEASE_TARGET_CY, RELEASE_TARGET_H, RELEASE_TARGET_W
 from robot.vision.egg_size import EggDetection, classify_size
 
-ArmStatus = Literal["holding", "syncing", "following", "leader fault", "no leader", "auto release", "auto catch"]
-ARM_STATUSES: Final = ("holding", "syncing", "following", "leader fault", "no leader", "auto release", "auto catch")
+ArmStatus = Literal["holding", "syncing", "following", "leader fault", "no leader", "auto release", "auto catch",
+                    "torque off"]
+ARM_STATUSES: Final = ("holding", "syncing", "following", "leader fault", "no leader", "auto release", "auto catch",
+                       "torque off")
 # Ellipses: the egg target and detections. Rectangles: the basket and the Auto Release target.
 OverlayKind = Literal["egg_ok", "egg_out", "target", "basket", "release_target"]
 OVERLAY_KINDS: Final = ("egg_ok", "egg_out", "target", "basket", "release_target")
@@ -51,8 +53,8 @@ class Overlay:
 class DisplayStatus:
     """Mode, running action, FSC voice input, notice and its level, arm status, Stop latch, overlays,
     seconds of release motion recorded so far (None when not recording), Auto Release playback
-    progress 0..1 (None when not playing), the Auto Catch phase ("" when it is not running), and
-    the seconds spent in the pick phase (None outside it)."""
+    progress 0..1 (None when not playing), the Auto Catch phase ("" when it is not running), the
+    seconds spent in the pick phase (None outside it), and whether the arm torque is off."""
 
     mode: Mode = "manual"
     action: Action = "none"
@@ -66,6 +68,7 @@ class DisplayStatus:
     progress: float | None = None
     phase: CatchPhase | Literal[""] = ""
     phase_s: float | None = None
+    torque_off: bool = False
 
 
 TARGET_OVERLAY: Final = Overlay(FRONT_CAMERA_KEY, ALIGN_TARGET_CX, ALIGN_TARGET_CY, ALIGN_TARGET_W, ALIGN_TARGET_H,
@@ -115,8 +118,9 @@ def display_status(
     app: AppState, arm_status: ArmStatus, overlays: tuple[Overlay, ...] = (), recording_s: float | None = None,
     phase_s: float | None = None,
 ) -> DisplayStatus:
-    """The displayable part of the application state plus the arm status, overlays, the recording
-    time, the Auto Release playback progress, the Auto Catch phase, and the pick time."""
+    """The displayable part of the application state (including the arm torque off flag) plus the
+    arm status, overlays, the recording time, the Auto Release playback progress, the Auto Catch
+    phase, and the pick time."""
     return DisplayStatus(
         mode=app.mode,
         action=app.action,
@@ -130,4 +134,5 @@ def display_status(
         progress=release_progress(app.release) if app.action == "auto_release" else None,
         phase=app.catch.phase if app.action == "auto_catch" else "",
         phase_s=phase_s,
+        torque_off=app.torque_off,
     )

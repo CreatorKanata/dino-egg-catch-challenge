@@ -4,6 +4,8 @@ The fork's host writes Goal_Position on every action and fails when no arm keys 
 so each command carries six arm positions plus the three base velocities. The arm pose is
 captured at connect and replaced by every explicitly commanded pose (leader-arm following);
 otherwise the last pose is repeated. Arm values are never derived from controller input.
+Every action also carries ARM_TORQUE_KEY (1.0 torque on, 0.0 released; read by the fork's host),
+and capture_hold re-reads the held pose after the arm was moved by hand while its torque was off.
 Disconnecting always sends zero velocities first; the host's 500 ms watchdog is only a backstop.
 """
 
@@ -11,7 +13,7 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from robot.config import ARM_KEYS, PI_REMOTE_IP, ROBOT_ID, ZMQ_CMD_PORT, ZMQ_OBSERVATION_PORT
+from robot.config import ARM_KEYS, ARM_TORQUE_KEY, PI_REMOTE_IP, ROBOT_ID, ZMQ_CMD_PORT, ZMQ_OBSERVATION_PORT
 from robot.controller_to_action import BASE_KEYS, stop_action
 
 logger = logging.getLogger(__name__)
@@ -84,8 +86,11 @@ class LeKiwiAdapter:
     def observe(self) -> dict[str, Any]:
         return self._client.get_observation()
 
-    def send_action(self, base: Mapping[str, float], arm_pose: Mapping[str, float] | None = None) -> None:
-        """Send the base velocities with `arm_pose`, or with the held pose when it is None.
+    def send_action(
+        self, base: Mapping[str, float], arm_pose: Mapping[str, float] | None = None, arm_torque: bool = True
+    ) -> None:
+        """Send the base velocities with `arm_pose`, or with the held pose when it is None, and the
+        arm torque flag (ARM_TORQUE_KEY: 1.0 on, 0.0 released).
 
         A given `arm_pose` becomes the new held pose (a new dict; the old one is not mutated),
         so stop() and later frames repeat the last commanded arm position.
@@ -93,17 +98,27 @@ class LeKiwiAdapter:
         if self.arm_hold is None:
             raise RuntimeError("Arm pose is unknown; call connect() first")
         pose = self.arm_hold if arm_pose is None else {key: float(arm_pose[key]) for key in ARM_KEYS}
-        self._client.send_action(compose_action(base, pose))
+        self._client.send_action({**compose_action(base, pose), ARM_TORQUE_KEY: 1.0 if arm_torque else 0.0})
         self.arm_hold = pose
 
-    def stop(self) -> None:
-        """Send zero base velocities (with the held arm pose) when possible."""
+    def capture_hold(self, observation: Mapping[str, Any]) -> None:
+        """Replace the held pose with the observed arm positions (after torque off, the arm may have
+        been moved by hand). A bad observation is logged and the old hold kept; never raises."""
+        try:
+            self.arm_hold = capture_arm_pose(observation)
+        except (KeyError, ValueError):
+            logger.exception("Cannot re-read the arm pose; keeping the previous hold")
+            return
+        logger.info("Holding arm at observed pose: %s", self.arm_hold)
+
+    def stop(self, arm_torque: bool = True) -> None:
+        """Send zero base velocities (with the held arm pose and the torque flag) when possible."""
         if not self.is_connected:
             return
         if self.arm_hold is None:
             logger.warning("Arm pose unknown; cannot send a stop command, relying on host watchdog")
             return
-        self.send_action(stop_action())
+        self.send_action(stop_action(), arm_torque=arm_torque)
 
     def disconnect(self) -> None:
         """Stop the base, then close the ZMQ sockets. Safe to call when not connected."""

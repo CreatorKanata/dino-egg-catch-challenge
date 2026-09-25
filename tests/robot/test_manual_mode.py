@@ -2,8 +2,8 @@
 
 manual_mode.py is stdlib-only, so command folding (including `Hi!` with the egg size and the
 recorded poses), the Auto Catch step, the base decision (alignment command while it runs, else driving
-only in Manual Mode and never in a stop frame), and the arm decision (no leader, held, fault,
-syncing, following) are verified directly, independent of the loop wiring in test_drive_loop.py.
+only in Manual Mode and never in a stop frame), and the arm decision (torque off, no leader, held,
+fault, syncing, following) are verified directly, independent of the loop wiring in test_drive_loop.py.
 """
 
 from dataclasses import replace
@@ -40,7 +40,8 @@ class FoldCommandsTests(unittest.TestCase):
         result = fold_commands(AppState(), ("stop", "hi"), 5.0)
         self.assertTrue(result.stop_base and result.disengage_arm)
         self.assertTrue(result.app.stopped)  # "hi" is ignored while stopped
-        resumed = fold_commands(AppState(), ("stop", "mode_toggle"), 5.0)
+        self.assertTrue(fold_commands(AppState(), ("stop", "mode_toggle"), 5.0).app.stopped)  # Go Go! ignored
+        resumed = fold_commands(AppState(), ("stop", "mode_manual"), 5.0)
         self.assertEqual((resumed.app.stopped, resumed.app.mode, resumed.app.notice), (False, "manual", "MANUAL"))
         self.assertEqual(resumed.app.notice_until, 5.0 + NOTICE_SECONDS)
         self.assertEqual(fold_commands(AppState(), ("mode_toggle", "mode_toggle"), 0.0).app.mode, "manual")
@@ -126,6 +127,13 @@ class PlanArmTests(unittest.TestCase):
             with self.subTest(status=status, app=app):
                 result = plan_arm(HOLD, leader, engaged, app, has_leader, 0.1)
                 self.assertEqual(result, (pose, ArmFollowState(engaged=False), status))
+
+    def test_torque_off_holds_the_commanded_pose_and_skips_the_leader(self):
+        off = AppState(stopped=True, torque_off=True)
+        for has_leader in (True, False):
+            with self.subTest(has_leader=has_leader):
+                result = plan_arm(HOLD, NEAR, ArmFollowState(engaged=True), off, has_leader, 0.1)
+                self.assertEqual(result, (HOLD, ArmFollowState(engaged=False), "torque off"))
 
     def test_syncing_then_following(self):
         pose, follow, status = plan_arm(HOLD, FAR, ArmFollowState(), AppState(), True, 0.0)

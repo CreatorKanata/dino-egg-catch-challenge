@@ -2,7 +2,8 @@
 
 The KachiButton types plain ASCII phrases into the focused signboard window; kachi_phrases.feed
 turns typed chunks into commands. These tests cover chunking, the 1 s gap rule, back-to-back
-phrases, exact matching, and the buffer cap without pygame or a keyboard.
+phrases, exact matching (both spellings of the stop unit's STOP / OFF / MODE keys), and the
+buffer cap without pygame or a keyboard.
 """
 
 import unittest
@@ -27,7 +28,8 @@ class FeedTests(unittest.TestCase):
         self.assertEqual(buffer.text, "")
 
     def test_all_phrases_map_to_commands(self):
-        cases = {"Go Go!": "mode_toggle", "Hi!": "hi", "Thx": "thx", "Stop": "stop"}
+        cases = {"Go Go!": "mode_toggle", "Hi!": "hi", "Thx": "thx", "Stop": "stop", "STOP": "stop",
+                 "OFF": "torque_off", "Off": "torque_off", "MODE": "mode_manual", "Mode": "mode_manual"}
         for phrase, command in cases.items():
             with self.subTest(phrase=phrase):
                 self.assertEqual(feed(PhraseBuffer(), phrase, 5.0)[1], (command,))
@@ -61,7 +63,7 @@ class FeedTests(unittest.TestCase):
         self.assertTrue(buffer.text.endswith("HiTh"))
 
     def test_exact_case_space_and_punctuation(self):
-        for text in ("stop", "STOP", "GoGo!", "Go Go", "go go!", "Hi", "hi!", "thx", "Th x", "S top"):
+        for text in ("stop", "sTOP", "off", "mode", "GoGo!", "Go Go", "go go!", "Hi", "hi!", "thx", "Th x", "S top"):
             with self.subTest(text=text):
                 self.assertEqual(feed(PhraseBuffer(), text, 0.0)[1], ())
 

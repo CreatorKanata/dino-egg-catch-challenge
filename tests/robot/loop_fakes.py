@@ -56,18 +56,27 @@ class FakeReader:
 
 
 class FakeAdapter:
-    """Mimics LeKiwiAdapter.send_action(base, arm_pose): records and holds the last arm pose."""
+    """Mimics LeKiwiAdapter.send_action(base, arm_pose, arm_torque): records and holds the last arm
+    pose and records the torque flags; capture_hold re-reads the hold from an observation. Set
+    `pose` to add arm positions to the observations."""
 
     def __init__(self):
-        self.sent, self.arms, self.arm_hold = [], [], dict(HOLD)
+        self.sent, self.arms, self.torques, self.arm_hold = [], [], [], dict(HOLD)
+        self.pose, self.captured = None, []
 
-    def send_action(self, base, arm_pose=None):
+    def send_action(self, base, arm_pose=None, arm_torque=True):
         self.sent.append(dict(base))
         self.arm_hold = dict(self.arm_hold if arm_pose is None else arm_pose)
         self.arms.append(self.arm_hold)
+        self.torques.append(arm_torque)
+
+    def capture_hold(self, observation):
+        self.captured.append(observation)
+        if all(key in observation for key in ARM_KEYS):
+            self.arm_hold = {key: float(observation[key]) for key in ARM_KEYS}
 
     def observe(self):
-        return {"front": FRONT_RGB, "wrist": None, "x.vel": 0.0}
+        return {"front": FRONT_RGB, "wrist": None, "x.vel": 0.0, **(self.pose or {})}
 
 
 class FakeLeader:

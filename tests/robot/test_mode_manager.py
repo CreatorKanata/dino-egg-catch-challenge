@@ -1,8 +1,8 @@
 """tests/robot/test_mode_manager.py: Hardware-free checks of the mode manager rules.
 
 Each KachiButton command is applied to a frozen AppState; the tests pin down every rule in the
-spec (Stop and its latch, resume by Go Go!, mode toggle, Thx routing and FSC voice toggle,
-ignore-while-action, notice expiry) as recorded in docs/spec/operating-modes.md. Auto Catch start
+spec (Stop and its latch, arm torque off, resume by MODE only, mode toggle, Thx routing and FSC
+voice toggle, ignore-while-action, notice expiry) as recorded in docs/spec/operating-modes.md. Auto Catch start
 and outcomes are in test_mode_manager_catch.py, Auto Release in test_mode_manager_release.py.
 """
 
@@ -91,13 +91,13 @@ class StopLatchAndUnknownTests(unittest.TestCase):
                 self.assertEqual(result.state, stopped)
                 self.assertFalse(result.stop_base or result.disengage_arm)
 
-    def test_go_go_resumes_manual_from_stopped_in_both_prior_modes(self):
+    def test_go_go_is_ignored_while_stopped(self):
         for prior in (AppState(), AppState(mode="fsc", voice_listening=True)):
             with self.subTest(prior=prior.mode):
                 stopped = apply_command(prior, "stop", 1.0).state
                 result = apply_command(stopped, "mode_toggle", 2.0)
-                self.assertEqual(result.state, AppState(notice="MANUAL", notice_until=2.0 + NOTICE_SECONDS))
-                self.assertTrue(result.stop_base and result.disengage_arm)
+                self.assertEqual(result.state, stopped)
+                self.assertFalse(result.stop_base or result.disengage_arm)
 
     def test_stop_while_stopped_stays_stopped(self):
         stopped = apply_command(AppState(), "stop", 1.0).state
@@ -109,6 +109,52 @@ class StopLatchAndUnknownTests(unittest.TestCase):
         start = AppState()
         apply_command(start, "stop", 1.0)
         self.assertEqual(start, AppState())
+
+
+BUSY_STATES = (
+    AppState(),
+    AppState(action="auto_catch", catch=start_catch(0.0, POSE, POSE, POSE), notice="x", notice_until=1.0),
+    AppState(mode="fsc", voice_listening=True),
+    AppState(stopped=True, notice="STOP", notice_until=1.0),
+    AppState(stopped=True, torque_off=True),
+)
+
+
+class TorqueOffTests(unittest.TestCase):
+    def test_torque_off_from_every_state(self):
+        for start in BUSY_STATES:
+            with self.subTest(start=start):
+                result = apply_command(start, "torque_off", 10.0)
+                self.assertEqual(result.state, AppState(stopped=True, torque_off=True, notice="TORQUE OFF",
+                                                        notice_until=10.0 + NOTICE_SECONDS))
+                self.assertTrue(result.stop_base and result.disengage_arm)
+
+    def test_stop_keeps_torque_off(self):
+        off = apply_command(AppState(), "torque_off", 1.0).state
+        result = apply_command(off, "stop", 2.0)
+        self.assertEqual(result.state, AppState(stopped=True, torque_off=True, notice="STOP",
+                                                notice_until=2.0 + NOTICE_SECONDS))
+        self.assertTrue(result.stop_base and result.disengage_arm)
+        self.assertFalse(apply_command(AppState(), "stop", 2.0).state.torque_off)
+
+    def test_hi_thx_and_go_go_ignored_while_torque_off(self):
+        off = apply_command(AppState(), "torque_off", 1.0).state
+        for command in ("hi", "thx", "mode_toggle"):
+            with self.subTest(command=command):
+                result = apply_command(off, command, 2.0)
+                self.assertEqual(result.state, off)
+                self.assertFalse(result.stop_base or result.disengage_arm)
+        self.assertFalse(manual_control_allowed(off))
+
+
+class ModeManualTests(unittest.TestCase):
+    def test_mode_manual_returns_to_manual_from_every_state(self):
+        for start in BUSY_STATES:
+            with self.subTest(start=start):
+                result = apply_command(start, "mode_manual", 5.0)
+                self.assertEqual(result.state, AppState(notice="MANUAL", notice_until=5.0 + NOTICE_SECONDS))
+                self.assertTrue(result.stop_base and result.disengage_arm)
+                self.assertTrue(manual_control_allowed(result.state))
 
 
 class NoticeAndControlTests(unittest.TestCase):

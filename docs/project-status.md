@@ -12,7 +12,7 @@ Every statement about robot behavior below was owner-tested on 2026-09-24/25 unl
 | Area | State | Notes |
 | --- | --- | --- |
 | Manual Mode | Works on the robot | Base by dino-controller (joystick translation, encoder rotation 9° per click), arm by leader arm with slow engagement; one or two players |
-| KachiButton controls | Works | `Go Go!` Manual/FSC toggle, `Hi!` Auto Catch, `Thx` Auto Release, `Stop` latch on a second unit; signboard window must keep focus |
+| KachiButton controls | Works | `Go Go!` Manual/FSC toggle, `Hi!` Auto Catch, `Thx` Auto Release, `Stop` latch on a second unit; signboard window must keep focus. Stop unit `OFF` (arm torque off) and `MODE` (the only resume): unit-tested only, needs the pulled Pi host |
 | Signboard | Works | pygame in its own interpreter, 16:9 overhead + front/wrist, egg/basket outlines, notices; `c` capture, `b`/`k`/`r` staff keys |
 | Egg detection | Works: green, red, yellow | Spot-anchored, edge fence + hull cap, ~13-17 ms/frame; weak spots: shaded lower half shortens the box, flicker when a same-colored object stands right behind the egg |
 | Auto Catch alignment | Works | Base aligns on ellipse width (target 0.607) and center x; egg kept on the signboard guide |
@@ -28,7 +28,7 @@ Every statement about robot behavior below was owner-tested on 2026-09-24/25 unl
 Pi (fork checkout, env `lerobot312`):
 
 ```bash
-cd ~/lerobot-dino-egg-catch-challenge && git pull
+cd ~/lerobot-dino-egg-catch-challenge && git pull   # must include the `arm_torque` host change, or the stop unit's OFF does nothing
 ./examples/lekiwi/start_dino_host.sh          # camera controls, then lekiwi_host --robot.id=dino_kiwi
 ```
 
@@ -132,7 +132,8 @@ camera's coverage of the whole field at 16:9, and the AprilTag size that the ove
 When the owner says "we are at the venue", work through this list in order; each step names the capture or command that gives the
 evidence. Budget about 60 minutes before opening. Steps 1-4 can run while the field is being set up.
 
-1. **Network and host.** Pi and Mac on the dedicated link; `ping` the Pi (jitter under 10 ms). Start the host with
+1. **Network and host.** Pi and Mac on the dedicated link; `ping` the Pi (jitter under 10 ms). `git pull` the fork on the Pi to a
+   commit whose `LeKiwi.send_action` reads `arm_torque` (else OFF shows TORQUE OFF while the arm stays stiff). Start the host with
    `POWER_LINE=2 FRONT_EXPOSURE=<venue> ./examples/lekiwi/start_dino_host.sh`; start with `FRONT_EXPOSURE=150` and adjust so the front
    image is neither dark nor clipped (check a `c` capture). Wrist: keep `exposure_dynamic_framerate=0`; if the wrist image is dark, raise
    `WRIST_GAIN` before touching exposure.
@@ -153,12 +154,13 @@ evidence. Budget about 60 minutes before opening. Steps 1-4 can run while the fi
    the target. Same for the basket width at the release position (`RELEASE_TARGET_W`).
 7. **Wrist focus.** At the catch pose, capture and check the wrist frame is sharp on the egg; adjust `WRIST_FOCUS` on the Pi if needed.
 8. **Acceptance run.** Manual Mode drive for one minute; `Hi!` three times per color from different offsets (expect alignment, catch,
-   return to the release pose); `Thx` twice into the basket; `Stop` once during a catch (arm holds, base zero, `Go Go!` resumes). Note
+   return to the release pose); `Thx` twice into the basket; `STOP` once during a catch (arm holds, base zero, `MODE` resumes); `OFF` once with a hand under the arm (limp, base zero), then `MODE`
+   (torque back at the present pose, slow re-sync). Note
    failures with the capture stamps and the `captures/*-align.csv` traces for the assistant.
 9. **Fine-tune (optional).** If the schedule allows, record ~10 episodes per color on site with the recorder, then run the notebook with
    `RUN_FINETUNE=True` and start the app with `--pick-policy CreatorKanata/act_dino_pick_egg_venue`. Keep the pre-event model as the
    fallback (`--pick-policy CreatorKanata/act_dino_pick_egg`).
-10. **Before opening.** Signboard fullscreen and focused, KachiButtons plugged in (`Stop` unit tested), Rerun off, phone hotspot off,
+10. **Before opening.** Signboard fullscreen and focused, KachiButtons plugged in (stop unit's `STOP`, `OFF`, `MODE` tested), Rerun off, phone hotspot off,
     the leader arm parked at the release pose, and a fresh `c` capture set saved as the venue reference.
 
 What to tell the assistant on arrival: the lighting (natural, stage, mixed), the approximate size of the field, which colors are in

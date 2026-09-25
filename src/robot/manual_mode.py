@@ -5,9 +5,9 @@ size class and the recorded poses, `Thx` with the basket size class and the reco
 advances a running Auto Catch or Auto Release, then decides the base action (the action's command
 while it runs, else controller driving only in Manual Mode, never in a stop frame or while the Stop
 latch holds) and the arm pose (the action's pose while it runs; else slow engagement, then leader
-following; held in FSC, while stopped, and on leader faults), and whether the front-camera detectors
-run this frame (not in action phases that ignore them). Also the loop's change logs and its
-Rerun scalars. Split out of drive_loop.py to keep files small. Stdlib-only: no hardware is touched
+following; held in FSC, while stopped or the arm torque is off, and on leader faults), and whether
+the front-camera detectors run this frame (not in action phases that ignore them). Also the loop's
+change logs and its Rerun scalars. Split out of drive_loop.py to keep files small. Stdlib-only: no hardware is touched
 here, so every rule is unit-tested.
 """
 
@@ -202,8 +202,11 @@ def plan_arm(
     """Arm pose to send, next follow state, and the status shown on the signboard.
 
     A leader fault also disengages following, so a recovered leader is approached slowly again
-    instead of jumping to wherever it was moved during the fault.
+    instead of jumping to wherever it was moved during the fault. While the arm torque is off the
+    leader is ignored and the commanded pose is repeated (the host does not write it).
     """
+    if app.torque_off:
+        return dict(commanded), disengaged(), "torque off"
     if not has_leader:
         return dict(commanded), disengaged(), "no leader"
     if not leader_wanted(app, has_leader):
@@ -215,12 +218,17 @@ def plan_arm(
 
 
 def log_changes(before: LoopState, after: LoopState) -> None:
-    """Log mode, action, notice, and arm status changes once per change."""
+    """Log Stop, torque off, mode, action, notice, and arm status changes once per change."""
     if after.app.stopped != before.app.stopped:
         if after.app.stopped:
-            logger.warning("STOP: base zeroed, arm held; press Go Go! to resume")
+            logger.warning("STOP: base zeroed, arm held; press MODE to resume")
         else:
-            logger.info("Stop released by Go Go!")
+            logger.info("Stop released by MODE")
+    if after.app.torque_off != before.app.torque_off:
+        if after.app.torque_off:
+            logger.warning("Arm torque OFF: the arm is limp; press MODE to re-enable it")
+        else:
+            logger.info("Arm torque on again (MODE)")
     if after.app.mode != before.app.mode:
         logger.info("Mode: %s", after.app.mode)
     if after.app.action != before.app.action:
