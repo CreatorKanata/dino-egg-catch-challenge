@@ -62,7 +62,7 @@ class PlanTests(unittest.TestCase):
     def test_task_with_color(self):
         self.assertEqual(task_with_color("Pick up the egg with the mouth", "red"),
                          "Pick up the egg with the mouth (red egg)")
-        self.assertEqual(plan(color="orange").single_task, "Pick up the egg with the mouth (orange egg)")
+        self.assertEqual(plan(color="yellow").single_task, "Pick up the egg with the mouth (yellow egg)")
 
     def test_plan_is_frozen(self):
         with self.assertRaises(AttributeError):

@@ -17,7 +17,8 @@ DEFAULT_EPISODE_TIME_S: Final = 20.0
 DEFAULT_RESET_TIME_S: Final = 15.0
 DEFAULT_FPS: Final = 30
 DEFAULT_TASK: Final = "Pick up the egg with the mouth"
-EGG_COLORS: Final = ("green", "red", "yellow", "orange")  # yellow: painted egg planned 2026-09-25; orange kept for compatibility
+# yellow (owner's name, orange-looking paint) replaced "orange" on 2026-09-25
+EGG_COLORS: Final = ("green", "red", "yellow")
 
 # --- Start-pose gate (before every episode) ------------------------------------------------
 GATE_TOLERANCE_DEG: Final = 10.0  # every non-gripper leader joint within this of the catch pose

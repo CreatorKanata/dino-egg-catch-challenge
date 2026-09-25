@@ -12,7 +12,8 @@ red-spotted egg -225648 (best position, room light), -225701 (extra light), -230
 directly behind it), -230437, -232411 (green egg in front, far red egg at the edge), 20260925-003436,
 and 20260925-010137/-010212 (red egg at the best position with a white wall, outlets, and a white
 PVC pipe directly behind it); basket-only captures 20260924-232927/-232953/-234124 give no egg.
-Egg colors (owner decisions): green, red, orange; blue-spotted eggs were dropped on 2026-09-24
+Egg colors (owner decisions): green, red, yellow (owner's name, orange-looking paint; replaces
+"orange", 2026-09-25); blue-spotted eggs were dropped on 2026-09-24
 (their captures -231156/-231202 remain a regression: no egg of another color may be reported).
 HSV uses OpenCV ranges: H 0-179, S and V 0-255.
 """
@@ -24,25 +25,33 @@ from robot.config import ALIGN_FULL_SPEED_ERROR_CX, ALIGN_FULL_SPEED_ERROR_H, AL
 # Body: white incl. the shadowed half (V >= 40), as ranges. S <= 50 at any hue; warm whites (H 0-40)
 # up to S 65, because the blue egg's white (H 19-30) reaches S 61-65 (p95, -231156) while bright tarp
 # reflections (bluish, S 50-65) must stay out (they joined the far egg of -222325 at S <= 65).
-EGG_BODY_HSV: Final = (((0, 0, 40), (179, 50, 255)), ((0, 0, 40), (40, 65, 255)))
+# Third range: the egg white lit bluish by the tarp (yellow egg -224252: H 96-107, S 61-158,
+# V 89-161), bright enough (V >= 85) to stay apart from the tarp itself (S 160-190, V 30-73).
+EGG_BODY_HSV: Final = (
+    ((0, 0, 40), (179, 50, 255)), ((0, 0, 40), (40, 65, 255)), ((85, 0, 85), (125, 150, 255)),
+)
 EGG_SPOT_HSV: Final = {
     # Green spot hue medians 76-82 on the five green captures; H 90 is the old boundary to the
     # dropped blue class (blue spot medians were 99-109).
     "green": (((35, 60, 15), (90, 255, 255)),),
     # Red spots: S 157-204 (p5-p95) under the earlier light, but down to S 95-118 (p10) and H 172 in
     # -010137/-010212; V down to 26 on the shadowed center spot. The low end never exceeds H 4 (p99),
-    # so red ends at H 7 (orange starts at 8).
+    # so red ends at H 7.
     "red": (((0, 100, 25), (7, 255, 255)), ((170, 100, 25), (179, 255, 255))),
-    # Orange (painted egg, owner decision 2026-09-24): PLACEHOLDER until the owner captures it;
-    # starts above red's H 7.
-    "orange": (((8, 120, 60), (25, 255, 255)),),
+    # Yellow (owner's name; the painted, glossy spots look orange to the camera): PLACEHOLDER from
+    # two captures, 20260925-223516 (spots H 1-22, S 57-180, V 35-177; glossy highlights down to
+    # S 38) and -224252 (more light: spot S p50 81-129). Overlaps red at H 5-7: each spot takes the
+    # color with the larger interior share (ties: red, listed first) and a cluster has one color, so
+    # a red egg stays red (tests). Recalibrate with more yellow captures (light on/off, far, basket).
+    # H <= 18: warm egg white (H 19-30, S up to 65, -231202) and beige clutter (H ~22) stay out.
+    "yellow": (((5, 70, 30), (18, 255, 255)),),
 }
 # Pink basket (-220336: H p5/50/95 135/172/176, S 77/131/182, V 21/64/73). Two ranges so it never
 # overlaps the red spots: H 150-169 at any S >= 60, and H 170-179 only below the red S floor (100).
 # Basket and red spots now share H 170-176 at S 100-182; the white-ring spot test, same-color
 # clusters, and the cap keep basket pixels out of eggs (basket-only captures -232927/-232953/-234124
 # give no egg).
-# Excluded from the body and the green/orange spot masks; the red mask drops only the first range
+# Excluded from the body and the green/yellow spot masks; the red mask drops only the first range
 # (the second is below its S floor anyway). Auto Release
 # uses the looser BASKET_DETECT_HSV below for its basket detector.
 BASKET_HSV: Final = (((150, 60, 20), (169, 255, 255)), ((170, 60, 20), (179, 99, 255)))
@@ -56,9 +65,19 @@ BASKET_EXCLUDED_FROM_RED: Final = BASKET_HSV[:1]
 # the blue tarp: blue-spotted eggs (dropped 2026-09-24) motivated "edge", which stays the default
 # because the white-ring test also makes spot detection robust to lighting and to tarp glints.
 EGG_SPOT_DETECTOR: Final = "edge"
+# Glossy paint punches low-saturation holes into spots (yellow egg); each spot mask is closed with
+# this kernel before any fill test.
+EGG_SPOT_CLOSE_PX: Final = 5
+# EdgeDrawing misses spots from frame to frame (glossy yellow egg: 1-3 of its spots under sensor
+# noise), so the edge stage also accepts HSV color blobs, ellipse-fitted, with this axis ratio at
+# most, passing the same white-ring and fill tests, and not already covered by an EdgeDrawing spot.
+EGG_BLOB_SPOT_MAX_ASPECT: Final = 2.5
+# ... and a minor axis of at least this (px): an egg with smaller spots (~4 d tall) is below the
+# "too far" size anyway, and tiny colored specks (an outlet LED, -010137) must not become spots.
+EGG_BLOB_SPOT_MIN_PX: Final = 18.0
 EGG_EDGE_SPOT_MIN_FILL: Final = 0.5  # "edge": majority of the interior in one spot color
-# "edge": egg white around a spot, the body ranges with V >= 60.
-EGG_RING_WHITE_HSV: Final = tuple(((low[0], low[1], 60), high) for low, high in EGG_BODY_HSV)
+# "edge": egg white around a spot, the body ranges with V >= 60 (the shaded range keeps V >= 85).
+EGG_RING_WHITE_HSV: Final = tuple(((low[0], low[1], max(60, low[2])), high) for low, high in EGG_BODY_HSV)
 EGG_RING_SCALES: Final = (1.15, 1.6)  # "edge": the ring spans these multiples of the ellipse axes
 # "edge": share of in-frame ring pixels that must be white; true spots measured 0.48-0.89 (a spot
 # at the egg's edge or next to another spot has less white around it), tarp patches near 0.

@@ -27,6 +27,8 @@ from robot.vision.config_vision import (
     EGG_CORE_SPOT_FACTOR,
     EGG_EDGE_SPOT_MIN_FILL,
     EGG_ELLIPSE_FILL_RANGE,
+    EGG_BLOB_SPOT_MAX_ASPECT,
+    EGG_BLOB_SPOT_MIN_PX,
     EGG_FENCE_CANNY,
     EGG_FENCE_DILATE_PX,
     EGG_HULL_CAP_FACTOR,
@@ -44,6 +46,7 @@ from robot.vision.config_vision import (
     EGG_SCALE_RANGE,
     EGG_SPOT_BLOB_MAX_FACTOR,
     EGG_SPOT_BLOB_MIN_EXTENT,
+    EGG_SPOT_CLOSE_PX,
     EGG_SPOT_CLUSTER_FACTOR,
     EGG_SPOT_DETECTOR,
     EGG_SPOT_HSV,
@@ -66,6 +69,9 @@ class DetectorParams:
         default_factory=lambda: {"red": BASKET_EXCLUDED_FROM_RED})
     spot_detector: str = EGG_SPOT_DETECTOR  # "hsv" or "edge"
     edge_spot_min_fill: float = EGG_EDGE_SPOT_MIN_FILL
+    spot_close_px: int = EGG_SPOT_CLOSE_PX
+    blob_spot_max_aspect: float = EGG_BLOB_SPOT_MAX_ASPECT
+    blob_spot_min_px: float = EGG_BLOB_SPOT_MIN_PX
     ring_white_hsv: tuple[HsvRange, ...] = EGG_RING_WHITE_HSV
     ring_scales: tuple[float, float] = EGG_RING_SCALES
     ring_white_fraction: float = EGG_RING_WHITE_FRACTION
@@ -155,6 +161,9 @@ def frame_masks(cv2: Any, frame: Any, params: DetectorParams) -> FrameMasks:
     not_basket = cv2.bitwise_not(in_ranges(cv2, hsv, params.basket_hsv))
     spots = {color: in_ranges(cv2, hsv, ranges) & _not_basket_for(cv2, hsv, color, not_basket, params)
              for color, ranges in params.spot_hsv.items()}
+    if params.spot_close_px > 1:  # fill glossy highlights inside spots
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (params.spot_close_px,) * 2)
+        spots = {color: cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel) for color, mask in spots.items()}
     return FrameMasks(body=in_ranges(cv2, hsv, params.body_hsv) & not_basket, spots=spots, colors=spots, hsv=hsv)
 
 

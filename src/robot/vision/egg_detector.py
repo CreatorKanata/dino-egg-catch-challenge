@@ -1,6 +1,6 @@
 """src/robot/vision/egg_detector.py: Spot-anchored, scale-adaptive egg detector for the front camera.
 
-Eggs are white ellipsoids with green, red, or orange spots (owner decisions, 2026-09-24). White
+Eggs are white ellipsoids with green, red, or yellow spots (owner decisions, 2026-09-24/25). White
 alone is not enough (tarp glints under strong light are as white, capture 20260924-223853), so the
 spots anchor the search: spot blobs (spot_edges.py or egg_masks.py) are clustered, and each
 cluster's median spot diameter d sets the scale. In a window around the cluster, the body OR the
@@ -35,7 +35,7 @@ __all__ = ("Candidate", "DetectorParams", "EggDetection", "best_egg", "detect_eg
 
 ELLIPSE_MIN_POINTS = 5  # cv2.fitEllipse needs at least five contour points
 KERNEL_MAX_PX = 15  # morphology runs on a downscaled mask so kernels stay about this size (speed)
-DUPLICATE_IOU = 0.5  # two clusters that found the same egg: keep the larger
+DUPLICATE_SHARE = 0.5  # overlap / smaller box: a cluster inside a larger egg (glossy fragment) is a duplicate
 
 
 @dataclass(frozen=True)
@@ -227,12 +227,12 @@ def _candidate(cv2: Any, masks: FrameMasks, cluster: SpotCluster, params: Detect
     return replace(shaped, rejected=_rejection(shaped, params, shaped=True))
 
 
-def _iou(a: Candidate, b: Candidate) -> float:
+def _overlap_share(a: Candidate, b: Candidate) -> float:
     left, top = max(a.x, b.x), max(a.y, b.y)
     right, bottom = min(a.x + a.w, b.x + b.w), min(a.y + a.h, b.y + b.h)
     overlap = max(0, right - left) * max(0, bottom - top)
-    union = a.w * a.h + b.w * b.h - overlap
-    return overlap / union if union > 0 else 0.0
+    smaller = min(a.w * a.h, b.w * b.h)
+    return overlap / smaller if smaller > 0 else 0.0
 
 
 def _frame(frame_bgr: Any) -> Any:
@@ -287,7 +287,7 @@ def detect_eggs(frame_bgr: Any, params: DetectorParams = DEFAULT_PARAMS) -> tupl
                   key=lambda candidate: candidate.area_px, reverse=True)
     kept: tuple[Candidate, ...] = ()
     for candidate in eggs:
-        if all(_iou(candidate, other) < DUPLICATE_IOU for other in kept):
+        if all(_overlap_share(candidate, other) < DUPLICATE_SHARE for other in kept):
             kept = kept + (candidate,)
     return tuple(_as_egg(candidate, width, height) for candidate in kept)
 

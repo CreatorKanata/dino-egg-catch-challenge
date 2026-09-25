@@ -38,9 +38,9 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(args.voice, "auto")
 
     def test_flags(self):
-        args = parse_args(["--egg-color", "orange", "--resume", "--root", "/d", "--no-rerun", "--remote-ip", "1.2.3.4",
+        args = parse_args(["--egg-color", "yellow", "--resume", "--root", "/d", "--no-rerun", "--remote-ip", "1.2.3.4",
                            "--leader-port", "/dev/x"])
-        self.assertEqual((args.egg_color, args.root, args.remote_ip, args.leader_port), ("orange", "/d", "1.2.3.4", "/dev/x"))
+        self.assertEqual((args.egg_color, args.root, args.remote_ip, args.leader_port), ("yellow", "/d", "1.2.3.4", "/dev/x"))
         self.assertTrue(args.resume and args.no_rerun)
 
     def test_egg_color_is_required_and_checked(self):

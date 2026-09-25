@@ -224,7 +224,7 @@ Owner decisions (2026-09-25, [spec/operating-modes.md](spec/operating-modes.md),
 - The egg is placed at the marked best position: the app's `place the egg here` outline when the app runs (mark the spot on the tarp with tape once), with deliberate offsets inside the alignment tolerance, about ±3 cm sideways and ±3 cm in depth.
 - The arm is at the catch pose (head down, egg in the wrist view); the recorder's start-pose gate puts it there (below).
 
-**Command** (from this repository root). Target 60 episodes split by color, about half green and half red (`orange` is also accepted); more if the success rate is low. The color goes into the stored task, `Pick up the egg with the mouth (green egg)`, so episodes can be filtered:
+**Command** (from this repository root). Target 60 episodes split by color, about half green and half red (`yellow` is also accepted); more if the success rate is low. The color goes into the stored task, `Pick up the egg with the mouth (green egg)`, so episodes can be filtered:
 
 ```bash
 PYTHONPATH=src python -m robot.recording.record_pick_egg --egg-color green --num-episodes 30

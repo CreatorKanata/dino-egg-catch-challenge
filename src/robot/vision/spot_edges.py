@@ -119,7 +119,10 @@ def edge_spot_blobs(cv2: Any, frame: Any, masks: FrameMasks, params: DetectorPar
     height, width = masks.shape
     interiors = {color: np.zeros((height, width), dtype=np.uint8) for color in masks.spots}
     blobs = []
-    for ellipse in _detect_ellipses(cv2, frame):
+    for ellipse in (*_detect_ellipses(cv2, frame), *_blob_ellipses(cv2, masks, params)):
+        if any(interiors[color][min(height - 1, max(0, int(ellipse.cy))), min(width - 1, max(0, int(ellipse.cx)))]
+               for color in interiors):
+            continue  # a blob already covered by an accepted spot
         verdict = _check(cv2, ellipse, masks, white, params)
         if verdict is None:
             continue
@@ -127,3 +130,19 @@ def edge_spot_blobs(cv2: Any, frame: Any, masks: FrameMasks, params: DetectorPar
         if blob is not None:
             blobs.append(blob)
     return EdgeSpots(blobs=tuple(blobs), interiors=interiors)
+
+
+def _blob_ellipses(cv2: Any, masks: FrameMasks, params: DetectorParams) -> tuple[_Ellipse, ...]:
+    """Ellipses fitted to the HSV spot-color blobs (outer contours), large and compact enough; tried
+    after the EdgeDrawing ellipses, which fit spot outlines better."""
+    min_area = params.min_spot_area_px
+    found = []
+    for mask in masks.spots.values():
+        for outline in cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
+            if len(outline) < 5 or cv2.contourArea(outline) < min_area:
+                continue
+            (cx, cy), (axis_a, axis_b), angle = cv2.fitEllipse(outline)
+            small, large = sorted((axis_a, axis_b))
+            if small >= params.blob_spot_min_px and large <= params.blob_spot_max_aspect * small:
+                found.append(_Ellipse(cx, cy, axis_a / 2, axis_b / 2, angle))
+    return tuple(found)

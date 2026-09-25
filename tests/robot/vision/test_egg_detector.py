@@ -2,7 +2,7 @@
 
 Frames are drawn with cv2 (640x480, blue tarp-colored background, no spot class) using the eggs'
 measured proportions: a white ellipse wider than tall with five spots of diameter ~1/4 of the egg
-height. One egg of each spot color (green, red on both hue ends, orange) gives one detection with a
+height. One egg of each spot color (green, red on both hue ends and at H 6, yellow) gives one detection with a
 tight bbox and a fitted ellipse; a blue-spotted egg (blue dropped 2026-09-24) gives none;
 spotless shapes, pink blobs, and white bars give none; thin glint streaks touching an egg do not
 widen its box; two distant eggs give two clusters; eggs cut by the border and notched eggs are
@@ -22,8 +22,9 @@ WIDTH, HEIGHT = 640, 480
 BROWN = (110, 65, 30)  # BGR, HSV (107, 185, 110): blue tarp color -> neither white body nor any spot class
 WHITE = (245, 245, 245)
 PINK = (110, 80, 150)  # BGR: H ~167, S ~119, V 150 -> inside BASKET_HSV
-# red_low is H 0, red_high H 177 (both ends of the red hue range), orange H 15
-SPOT_BGR = {"green": (40, 160, 60), "orange": (30, 125, 220), "red_low": (40, 40, 220), "red_high": (59, 43, 200)}
+# red_low is H 0, red_high H 177 (both ends of the red hue range), red_h6 H 6 (red/yellow overlap), yellow H 12
+SPOT_BGR = {"green": (40, 160, 60), "yellow": (67, 120, 200), "red_low": (40, 40, 220), "red_high": (59, 43, 200),
+            "red_h6": (43, 75, 200)}
 BASKET_BGR = ((38, 29, 60), (29, 18, 60))  # HSV (171, 132, 60) and (172, 179, 60): the real basket's pink
 SPOT_LAYOUT = ((-0.55, 0.05), (0.55, -0.1), (0.0, -0.6), (0.0, 0.55), (0.05, 0.0))  # x a, y b
 # 8, not 4: the edge fence (a white-background guard) trims the thin rim beyond a spot on the silhouette
@@ -71,13 +72,25 @@ class DetectEggsTests(unittest.TestCase):
         self.assertLessEqual(abs(axes_px[0] - 200) + abs(axes_px[1] - 260), 16)  # rim trimmed by the fence
         self.assertGreater(det.solidity, 0.95)
 
-    def test_orange_and_red_variants_on_both_hue_ends(self):
-        for spot, color in (("orange", "orange"), ("red_low", "red"), ("red_high", "red")):
+    def test_yellow_and_red_variants_on_both_hue_ends(self):
+        # red_h6 lies in the red/yellow hue overlap (H 5-7) and stays red
+        for spot, color in (("yellow", "yellow"), ("red_low", "red"), ("red_high", "red"), ("red_h6", "red")):
             with self.subTest(spot=spot):
                 center, axes = (300, 240), (120, 90)
                 detections = detect_eggs(draw_egg(background(), center, axes, spot))
                 self.assertEqual([det.color for det in detections], [color])
                 self.assert_box(detections[0], center, axes)
+
+    def test_glossy_yellow_spots_with_highlights_are_one_yellow_egg(self):
+        center, axes = (300, 240), (120, 90)
+        frame = draw_egg(background(), center, axes, "yellow")
+        for fx, fy in SPOT_LAYOUT:  # low-saturation glossy highlights punched into every spot
+            x, y = center[0] + int(fx * axes[0]), center[1] + int(fy * axes[1])
+            cv2.circle(frame, (x - 5, y - 4), 3, (190, 200, 225), -1)
+            cv2.circle(frame, (x + 6, y + 2), 2, (190, 200, 225), -1)
+        detections = detect_eggs(frame)
+        self.assertEqual([det.color for det in detections], ["yellow"])
+        self.assert_box(detections[0], center, axes)
 
     def test_shapes_without_spots_are_not_eggs(self):
         frame = draw_egg(background(), (200, 240), (100, 80))
