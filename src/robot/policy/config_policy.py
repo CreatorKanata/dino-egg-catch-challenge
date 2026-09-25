@@ -34,7 +34,8 @@ PICK_SETTLE_DEG: Final = 1.0
 PICK_MIN_S: Final = 3.0
 # Percent. Placeholder: no local copy of CreatorKanata/dino_pick_egg was available to measure the
 # final gripper value of the recorded episodes (they end with the egg held); measure and replace.
-PICK_GRIPPER_CLOSED_MAX: Final = 5.0
+PICK_GRIPPER_CLOSED_MAX: Final = 12.0  # percent; measured on CreatorKanata/dino_pick_egg (20 green episodes, 2026-09-25):
+# the gripper at episode end reads 3.2-3.7 in most episodes and 8-11.5 in a few; two outliers (22.8, 92.3) look like failed grasps.
 
 if PICK_ACTION_HORIZON < 1 or PICK_SETTLE_FRAMES < 1:
     raise ValueError("PICK_ACTION_HORIZON and PICK_SETTLE_FRAMES must be at least 1")
