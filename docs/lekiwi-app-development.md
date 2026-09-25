@@ -232,7 +232,7 @@ Defaults (`src/robot/recording/config_recording.py`): `--repo-id CreatorKanata/d
 
 **Keys** (fork `utils/keyboard_input.py`, verified 2026-09-25; printed at start-up): right arrow (or `n`) ends the episode early, left arrow (or `r`) discards and re-records it, Esc (or `q`) stops the session. The base keys of the keyboard teleoperator stay active (`w`/`s`, `a`/`d`, `z`/`x`, `r`/`f` for speed); keep the base parked, and prefer the left arrow over `r`, which also raises the base speed level.
 
-**Episode.** After "Recording episode N of M, <color> egg", teleoperate with the leader arm until the egg is held in the mouth and lifted slightly, still head down, and press the right arrow. Do not raise the arm to the release pose: the application does that. An episode also ends after `--episode-time-s`.
+**Episode (owner decision, 2026-09-25).** After "Recording episode N of M, <color> egg", teleoperate with the leader arm: grasp the egg with the mouth, return to the catch pose (this lifts the egg a few centimetres; the lower jaw is fixed, so the held egg is not pressed on the floor), hold still for about one second, then press the right arrow. Every episode ends the same way so the policy learns to stop there; do not raise the arm to the release pose, the application does that. An episode also ends after `--episode-time-s`.
 
 **Reset.** After "Reset", the recorder runs `record_loop` without the dataset for `--reset-time-s` (the arm keeps following the leader): put the egg back on the mark with a new small offset. No reset follows the last attempt unless it is re-recorded. Then the episode is saved (`dataset.save_episode()`, as the fork's CLI does; the base is zeroed first), or discarded after a left arrow, and the gate runs again.
 
