@@ -6,8 +6,8 @@ OpenCV: no runner -> the stub; with a runner the raw RGB observation reaches it 
 signboard still gets the BGR copies, the runner is reset once per pick, its capped arm action is
 sent with the base at zero, "Catch finished" then "Ready"; Stop during the pick zeros the base, holds the
 arm, and never calls the runner again; a failing reset becomes "Policy error"; the front-camera
-detectors are skipped in the arm-only phases (pick included) but run while aligning; and the startup
-loader returns None (stub) when disabled or when loading fails.
+detectors are skipped in the arm-only phases (pick included) but run while aligning; the startup
+loader returns None (stub) when disabled or when loading fails; and the ensembling flags parse.
 """
 
 import unittest
@@ -26,7 +26,8 @@ from loop_fakes import FakeReader, FakeView, temp_arm_paths
 from robot.auto_catch import CatchLimits
 from robot.config import ALIGN_TARGET_CX, ALIGN_TARGET_H, ALIGN_TARGET_W_EGG, LOOP_HZ
 from robot.policy.pick_step import PickLimits
-from robot.teleop_drive import load_pick_policy
+from robot.policy.config_policy import PICK_TEMPORAL_ENSEMBLE_COEFF
+from robot.teleop_drive import load_pick_policy, parse_args
 from robot.vision.egg_size import EggDetection
 
 ON_TARGET = EggDetection(cx=ALIGN_TARGET_CX, cy=0.5, w=ALIGN_TARGET_W_EGG, h=ALIGN_TARGET_H, color="green", spots=3,
@@ -172,7 +173,23 @@ class LoadPickPolicyTests(unittest.TestCase):
         self.assertIn("stub", logs.output[0])
         loaded = mock.Mock()
         self.assertIs(load_pick_policy("hub/id", "mps", factory=loaded), loaded.return_value)
-        loaded.assert_called_once_with("hub/id", device="mps")
+        loaded.assert_called_once_with("hub/id", device="mps", ensemble_coeff=PICK_TEMPORAL_ENSEMBLE_COEFF)
+        load_pick_policy("hub/id", "cpu", None, factory=loaded)
+        self.assertIsNone(loaded.call_args.kwargs["ensemble_coeff"])
+
+
+class EnsembleArgsTests(unittest.TestCase):
+    def test_default_value_and_off_switch(self):
+        self.assertEqual(parse_args([]).pick_ensemble, PICK_TEMPORAL_ENSEMBLE_COEFF)
+        self.assertEqual(parse_args(["--pick-ensemble", "0.05"]).pick_ensemble, 0.05)
+        self.assertIsNone(parse_args(["--no-pick-ensemble"]).pick_ensemble)
+
+    def test_bad_values_and_both_flags_are_refused(self):
+        for argv in (["--pick-ensemble", "-1"], ["--pick-ensemble", "fast"], ["--pick-ensemble", "inf"],
+                     ["--pick-ensemble", "0.01", "--no-pick-ensemble"]):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit), \
+                    mock.patch("sys.stderr"):  # argparse prints the usage error
+                parse_args(argv)
 
 
 if __name__ == "__main__":

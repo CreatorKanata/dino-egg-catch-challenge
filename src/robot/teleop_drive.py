@@ -27,7 +27,7 @@ from robot.dino_controller_reader import SerialControllerReader
 from robot.drive_loop import DriveDevices, loop
 from robot.leader_arm import LeaderArm
 from robot.lekiwi_adapter import LeKiwiAdapter
-from robot.policy.config_policy import PICK_POLICY_DEVICE, PICK_POLICY_PATH
+from robot.policy.config_policy import PICK_POLICY_DEVICE, PICK_POLICY_PATH, PICK_TEMPORAL_ENSEMBLE_COEFF
 from robot.policy.pick_policy import PickPolicy
 from robot.signboard_client import SignboardClient
 
@@ -59,16 +59,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--policy-device", default=PICK_POLICY_DEVICE,
                         help=f"pick policy device: auto (mps if available, else cpu), cpu, mps, or cuda "
                              f"(default: {PICK_POLICY_DEVICE})")
+    ensemble = parser.add_mutually_exclusive_group()
+    ensemble.add_argument("--pick-ensemble", type=ensemble_coeff, default=PICK_TEMPORAL_ENSEMBLE_COEFF,
+                          metavar="COEFF", help="ACT temporal ensembling coefficient (inference every frame; "
+                          f"chunked if too slow) (default: {PICK_TEMPORAL_ENSEMBLE_COEFF})")
+    ensemble.add_argument("--no-pick-ensemble", dest="pick_ensemble", action="store_const", const=None,
+                          help="chunked execution: one inference every PICK_ACTION_HORIZON frames")
     return parser.parse_args(argv)
 
 
-def load_pick_policy(path: str, device: str, factory: Callable[..., PickPolicy] = PickPolicy) -> PickPolicy | None:
+def ensemble_coeff(text: str) -> float:
+    """argparse type for --pick-ensemble: a finite number >= 0."""
+    try:
+        value = float(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from error
+    if not 0 <= value < float("inf"):
+        raise argparse.ArgumentTypeError(f"must be a finite number >= 0, got {text!r}")
+    return value
+
+
+def load_pick_policy(path: str, device: str, ensemble: float | None = PICK_TEMPORAL_ENSEMBLE_COEFF,
+                     factory: Callable[..., PickPolicy] = PickPolicy) -> PickPolicy | None:
     """The loaded pick policy, or None (the stub) when disabled or when loading fails for any reason;
     the demo must not be blocked by a missing model."""
     if not path:
         logger.info("Pick policy disabled; Auto Catch runs the stub")
         return None
-    runner = factory(path, device=device)
+    runner = factory(path, device=device, ensemble_coeff=ensemble)
     try:
         runner.load()
     except Exception:
@@ -78,7 +96,7 @@ def load_pick_policy(path: str, device: str, factory: Callable[..., PickPolicy] 
 
 
 def build_devices(args: argparse.Namespace) -> DriveDevices:
-    pick_policy = load_pick_policy(args.pick_policy, args.policy_device)  # before any hardware
+    pick_policy = load_pick_policy(args.pick_policy, args.policy_device, args.pick_ensemble)  # before any hardware
     camera = None
     if not args.no_camera:
         from robot.top_camera import TopCamera  # loads cv2 and torch through LeRobot
@@ -154,7 +172,8 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Start the host on the Pi first: {HOST_COMMAND}")
     leader = "none (--no-leader)" if args.no_leader else args.leader_port
     print(f"Controller: {args.controller_port}  Robot: {args.remote_ip}  Leader arm: {leader}")
-    print(f"Pick policy: {args.pick_policy or 'none (stub)'}  Device: {args.policy_device}")
+    ensemble = "off" if args.pick_ensemble is None else args.pick_ensemble
+    print(f"Pick policy: {args.pick_policy or 'none (stub)'}  Device: {args.policy_device}  Ensembling: {ensemble}")
     run(args)
 
 

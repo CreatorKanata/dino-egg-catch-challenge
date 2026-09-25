@@ -3,8 +3,8 @@
 Loads a trained checkpoint (CreatorKanata/act_dino_pick_egg on the Hub, or a local directory)
 through a loader (lerobot_policy.py by default; a fake in tests), refuses policies that read
 anything but the wrist and front images and the state, and turns one LeKiwi observation into one
-action per loop frame (ACT runs the model once every n_action_steps frames and returns the queued
-actions in between). Timing: the first inference and then the running average are logged at INFO,
+action per loop frame (chunked: ACT runs the model once every n_action_steps frames and returns the
+queued actions in between; with temporal ensembling it runs every frame and averages the chunks). Timing: the first inference and then the running average are logged at INFO,
 at most once per PICK_TIMING_LOG_INTERVAL_S.
 
 RGB ORDER (the most likely silent bug): the policy must receive the raw frames exactly as
@@ -28,6 +28,7 @@ from robot.policy.config_policy import (
     PICK_ACTION_HORIZON,
     PICK_POLICY_DEVICE,
     PICK_POLICY_FEATURES,
+    PICK_TEMPORAL_ENSEMBLE_COEFF,
     PICK_TIMING_LOG_INTERVAL_S,
 )
 
@@ -43,7 +44,8 @@ ACTION_KEYS = STATE_ORDER
 class LoadedPolicy:
     """A checkpoint ready for inference: `infer(frame) -> action values` (policy order), `reset()`,
     the input features with their shapes (images C, H, W), actions per inference, the device, the
-    policy type, and the output (action) feature shapes."""
+    policy type, the output (action) feature shapes, the temporal ensembling coefficient in use
+    (None = chunked), and the per-inference time measured at warm-up (seconds)."""
 
     infer: Callable[[Mapping[str, Any]], Sequence[float]]
     reset: Callable[[], None]
@@ -52,6 +54,8 @@ class LoadedPolicy:
     device: str
     policy_type: str = ""
     action_shapes: tuple[tuple[int, ...], ...] = ()
+    temporal_ensemble_coeff: float | None = None
+    warmup_inference_s: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -64,13 +68,20 @@ class InferenceTiming:
     logged_at: float | None = None
 
 
-Loader = Callable[[str, str, int], LoadedPolicy]
+Loader = Callable[[str, str, int, float | None], LoadedPolicy]
 
 
-def _lerobot_loader(path: str, device: str, horizon: int) -> LoadedPolicy:
+def _lerobot_loader(path: str, device: str, horizon: int, ensemble_coeff: float | None) -> LoadedPolicy:
     from robot.policy.lerobot_policy import load_lerobot_policy  # torch and LeRobot load only here
 
-    return load_lerobot_policy(path, device, horizon)
+    return load_lerobot_policy(path, device, horizon, ensemble_coeff)
+
+
+def execution_text(loaded: LoadedPolicy) -> str:
+    """How the policy runs, for the start-up log."""
+    if loaded.temporal_ensemble_coeff is not None:
+        return f"temporal ensembling on (coeff {loaded.temporal_ensemble_coeff:g}): inference every frame"
+    return f"chunked: inference every {loaded.n_action_steps} frames"
 
 
 def _image(observation: Mapping[str, Any], feature: str, shape: tuple[int, ...]) -> Any:
@@ -130,8 +141,10 @@ class PickPolicy:
     """Load once at startup; reset() at the start of every pick; act() once per loop frame."""
 
     def __init__(self, path: str, device: str = PICK_POLICY_DEVICE, horizon: int = PICK_ACTION_HORIZON,
-                 loader: Loader = _lerobot_loader, clock: Callable[[], float] = time.perf_counter) -> None:
+                 ensemble_coeff: float | None = PICK_TEMPORAL_ENSEMBLE_COEFF, loader: Loader = _lerobot_loader,
+                 clock: Callable[[], float] = time.perf_counter) -> None:
         self.path, self._device, self._horizon, self._loader, self._clock = path, device, horizon, loader, clock
+        self._ensemble_coeff = ensemble_coeff
         self._loaded: LoadedPolicy | None = None
         self._frames = 0  # act() calls since the last reset
         self.timing = InferenceTiming()
@@ -139,12 +152,14 @@ class PickPolicy:
     def load(self) -> LoadedPolicy:
         """Load and check the checkpoint; log what was loaded and how long it took. Errors propagate."""
         started = self._clock()
-        loaded = self._loader(self.path, self._device, self._horizon)
+        loaded = self._loader(self.path, self._device, self._horizon, self._ensemble_coeff)
         check_policy(loaded)
         self._loaded = loaded
         logger.info("Pick policy %s (%s) on %s: inputs %s, n_action_steps %d, loaded in %.1f s", self.path,
                     loaded.policy_type or "?", loaded.device, sorted(loaded.input_features), loaded.n_action_steps,
                     self._clock() - started)
+        logger.info("Pick policy %s; warm-up inference %.1f ms", execution_text(loaded),
+                    1000 * loaded.warmup_inference_s)
         return loaded
 
     def _require(self) -> LoadedPolicy:
@@ -153,7 +168,7 @@ class PickPolicy:
         return self._loaded
 
     def reset(self) -> None:
-        """Clear the action queue (a new pick starts from a fresh observation)."""
+        """Clear the action queue or the temporal ensembler (a new pick starts from a fresh observation)."""
         self._require().reset()
         self._frames = 0
 

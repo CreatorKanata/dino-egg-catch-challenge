@@ -3,23 +3,18 @@
 A fake loader stands in for the LeRobot checkpoint, so the observation assembly (state vector in
 LeKiwiClient's `_state_order`, the raw RGB frame passed through untouched, only the features the
 policy reads), the refusal of unknown features and mismatched frames, the nine-key action mapping,
-reset, the timing log, the device resolution, and the warm-up frame are verified in this process. One guarded test
-runs the real ACT config in a separate interpreter (skipped without LeRobot) to confirm the
-`n_action_steps` override the loader applies.
+reset, the timing log, and the execution log (temporal ensembling or chunked) are verified in this
+process. The loader's pure parts are in test_lerobot_policy.py.
 """
 
-import os
-from pathlib import Path
-import subprocess
-import sys
+from dataclasses import replace
 import unittest
 
 import numpy as np
 
-from robot.policy.lerobot_policy import resolve_device, zero_frame
-from robot.policy.pick_policy import ACTION_KEYS, LoadedPolicy, PickPolicy, build_frame
+from robot.policy.config_policy import PICK_TEMPORAL_ENSEMBLE_COEFF
+from robot.policy.pick_policy import ACTION_KEYS, LoadedPolicy, PickPolicy, build_frame, execution_text
 
-SRC = str(Path(__file__).resolve().parents[2] / "src")
 # LeKiwiClient._state_order in the fork (robots/lekiwi/lekiwi_client.py), copied, not imported.
 FORK_STATE_ORDER = ("arm_shoulder_pan.pos", "arm_shoulder_lift.pos", "arm_elbow_flex.pos", "arm_wrist_flex.pos",
                     "arm_wrist_roll.pos", "arm_gripper.pos", "x.vel", "y.vel", "theta.vel")
@@ -40,8 +35,8 @@ class FakeLoader:
         self.features, self.output, self.steps, self.fail, self.action = features, output, steps, fail, action
         self.frames, self.resets, self.calls = [], 0, []
 
-    def __call__(self, path, device, horizon):
-        self.calls.append((path, device, horizon))
+    def __call__(self, path, device, horizon, ensemble_coeff):
+        self.calls.append((path, device, horizon, ensemble_coeff))
         if self.fail is not None:
             raise self.fail
         return LoadedPolicy(infer=self.infer, reset=self.reset, input_features=self.features, n_action_steps=self.steps,
@@ -89,12 +84,27 @@ class BuildFrameTests(unittest.TestCase):
 class PickPolicyTests(unittest.TestCase):
     def test_load_passes_path_device_horizon_and_reports_the_policy(self):
         loader = FakeLoader()
-        runner = PickPolicy("local/ckpt", device="auto", horizon=7, loader=loader, clock=Clock())
+        runner = PickPolicy("local/ckpt", device="auto", horizon=7, ensemble_coeff=0.02, loader=loader, clock=Clock())
         with self.assertLogs("robot.policy.pick_policy", "INFO") as logs:
             loaded = runner.load()
-        self.assertEqual(loader.calls, [("local/ckpt", "auto", 7)])
+        self.assertEqual(loader.calls, [("local/ckpt", "auto", 7, 0.02)])
         self.assertEqual((loaded.device, loaded.n_action_steps), ("cpu", 10))
         self.assertIn("observation.images.wrist", "\n".join(logs.output))
+        self.assertIn("chunked: inference every 10 frames", "\n".join(logs.output))  # the fake loader ignores 0.02
+
+    def test_default_ensembling_and_execution_text(self):
+        loader = FakeLoader()
+        PickPolicy("p", loader=loader, clock=Clock()).load()
+        self.assertEqual(loader.calls[0][3], PICK_TEMPORAL_ENSEMBLE_COEFF)
+        ensembled = replace(loader("p", "cpu", 10, 0.01), temporal_ensemble_coeff=0.01, n_action_steps=1)
+        self.assertEqual(execution_text(ensembled), "temporal ensembling on (coeff 0.01): inference every frame")
+        runner = PickPolicy("p", loader=lambda *args: ensembled, clock=Clock())
+        runner.load()
+        runner.reset()
+        with self.assertLogs("robot.policy.pick_policy", "INFO"):
+            for _ in range(3):
+                runner.act(observation())
+        self.assertEqual(runner.timing.count, 3)  # ensembling: every frame runs the model
 
     def test_load_refuses_unknown_features_and_actions(self):
         for loader, pattern in ((FakeLoader(features={"observation.images.top": (3, 2, 2)}), "observation.images.top"),
@@ -134,35 +144,6 @@ class PickPolicyTests(unittest.TestCase):
         self.assertEqual(loader.resets, 1)
         self.assertIn("first inference 50.0 ms", logs.output[0])
         self.assertEqual(runner.timing.count, 2)  # frames 1 and 3 ran the model (2 steps per inference)
-
-
-class DeviceTests(unittest.TestCase):
-    def test_auto_prefers_mps(self):
-        self.assertEqual(resolve_device("auto", lambda: True), "mps")
-        self.assertEqual(resolve_device("auto", lambda: False), "cpu")
-        self.assertEqual(resolve_device("cuda", lambda: True), "cuda")
-
-    def test_warm_up_frame_matches_the_policy_inputs(self):
-        frame = zero_frame({"observation.state": (9,), "observation.images.wrist": (3, 480, 640)})
-        self.assertEqual((frame["observation.state"].shape, frame["observation.state"].dtype), ((9,), np.float32))
-        self.assertEqual((frame["observation.images.wrist"].shape, frame["observation.images.wrist"].dtype),
-                         ((480, 640, 3), np.uint8))
-
-
-class RealConfigTests(unittest.TestCase):
-    def test_act_config_takes_the_action_horizon(self):
-        code = ("import sys\n"
-                "try:\n    from lerobot.policies.act.configuration_act import ACTConfig\n"
-                "except ImportError:\n    sys.exit(77)\n"
-                "from robot.policy.lerobot_policy import _with_overrides\n"
-                "config = _with_overrides(ACTConfig(), 'ckpt', 'cpu', 10)\n"
-                "assert (config.n_action_steps, config.chunk_size, config.device) == (10, 100, 'cpu'), config\n"
-                "assert _with_overrides(ACTConfig(chunk_size=5, n_action_steps=5), 'c', 'cpu', 10).n_action_steps == 5\n")
-        env = {**os.environ, "PYTHONPATH": SRC}
-        result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, timeout=300)
-        if result.returncode == 77:
-            self.skipTest("LeRobot is not installed")
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
 
 
 if __name__ == "__main__":
