@@ -29,6 +29,13 @@ flowchart LR
 - The Raspberry Pi (`pi@lekiwi`, conda env `lerobot312`) runs the host from `~/lerobot-dino-egg-catch-challenge`:
 
   ```bash
+  ./examples/lekiwi/start_dino_host.sh    # applies the camera controls, then runs lekiwi_host --robot.id=dino_kiwi
+  ```
+
+  The wrapper (fork, 2026-09-25) runs `examples/lekiwi/dino_camera_settings.sh` first: the wrist camera's auto exposure lowered its rate to about 8 fps in dim light and its autofocus hunted, so it is set to a fixed 30 fps with focus 100; the front camera's auto exposure halved it to 15 fps, so it uses manual exposure (30 ms, gain 32). Without these controls the recorded datasets and the live feeds contain many repeated frames (62 percent of wrist frames in the first green dataset). `examples/lekiwi/99-dino-cameras.rules` re-applies them from udev after a replug. Plain `python -m lerobot.robots.lekiwi.lekiwi_host --robot.id=dino_kiwi` still works but leaves the cameras at their defaults.
+
+  ```bash
+  # equivalent without the wrapper
   python -m lerobot.robots.lekiwi.lekiwi_host --robot.id=dino_kiwi
   ```
 
