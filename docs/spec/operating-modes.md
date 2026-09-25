@@ -29,11 +29,11 @@ The KachiButton is a three-key USB keyboard keychain (companion repository `Crea
 | Mode unit | Top | `Go Go!` | Toggle between Manual Mode and FSC |
 | Mode unit | Lower left | `Hi!` | In Manual Mode: start Auto Catch. In FSC: first press starts voice input, second press ends it |
 | Mode unit | Lower right | `Thx` | In Manual Mode: start Auto Release. In FSC: no action (owner decision) |
-| Stop unit | Top | `STOP` (or `Stop`) | Emergency stop, in every mode |
-| Stop unit | Lower left | `OFF` (or `Off`) | Arm torque off (staff), in every mode; also a stop |
-| Stop unit | Lower right | `MODE` (or `Mode`) | Return to Manual Mode, in every mode; the only way out of a stop |
+| Stop unit | Top | `STOP` | Emergency stop, in every mode |
+| Stop unit | Lower left | `OFF` | Arm torque off (staff), in every mode; also a stop |
+| Stop unit | Lower right | `MODE` | Return to Manual Mode, in every mode; the only way out of a stop |
 
-Stop unit keys and their physical positions (top `STOP`, lower left `OFF`, lower right `MODE`): owner decision, confirmed 2026-09-25. The exact typed text is not yet confirmed, so the application accepts both spellings of each phrase.
+Stop unit keys and their physical positions (top `STOP`, lower left `OFF`, lower right `MODE`): owner decision, confirmed 2026-09-25. The unit types the phrases in capitals exactly as shown (owner-confirmed 2026-09-26).
 
 The application watches keyboard input for these phrases. The signboard window has keyboard focus for the whole exhibit (owner decision: this is the operating assumption, so no global keyboard hook is planned). Typed characters are matched only as complete phrases; input with more than 1 s between characters is discarded.
 
@@ -46,7 +46,7 @@ Rules that apply to every switch:
 
 ### Emergency stop behavior
 
-`Stop` (or ESC / closing the signboard, or Ctrl+C) is a full stop and full reset (owner decision): it zeroes the base, cancels any automatic action, discards pending encoder rotation, clears voice input, and holds the arm at its current pose with torque kept on. After `Stop` the application is latched in a stopped state: the base stays at zero and the arm stays held, `Hi!`, `Thx`, and `Go Go!` are ignored, and the signboard shows "STOPPED. Press MODE to resume" until the stop unit's `MODE` is pressed (owner decision, 2026-09-25; before that `Go Go!` resumed). That press returns to Manual Mode (never FSC) with arm following disengaged; following then resumes through the slow engagement below. `MODE` also works without a stop: it cancels a running action and returns to Manual Mode. Nothing moves again on its own after a stop (owner decision, 2026-09-24).
+`STOP` (or ESC / closing the signboard, or Ctrl+C) is a full stop and full reset (owner decision): it zeroes the base, cancels any automatic action, discards pending encoder rotation, clears voice input, and holds the arm at its current pose with torque kept on. After `STOP` the application is latched in a stopped state: the base stays at zero and the arm stays held, `Hi!`, `Thx`, and `Go Go!` are ignored, and the signboard shows "STOPPED. Press MODE to resume" until the stop unit's `MODE` is pressed (owner decision, 2026-09-25; before that `Go Go!` resumed). That press returns to Manual Mode (never FSC) with arm following disengaged; following then resumes through the slow engagement below. `MODE` also works without a stop: it cancels a running action and returns to Manual Mode. Nothing moves again on its own after a stop (owner decision, 2026-09-24).
 
 `STOP` keeps the arm torque on: the SO-ARM101 has no brakes, so a limp arm would fall under gravity, drop a held egg, and could hit the field or a hand. `OFF` is the explicit release (below); `STOP` never changes the torque, so a `STOP` after `OFF` leaves it off. This stop travels through the signboard process and the control loop, so it is a software stop measured in tens of milliseconds; the Pi host's 500 ms command watchdog remains the last line.
 
@@ -97,7 +97,7 @@ Egg colors (owner decision, 2026-09-24): white eggs with **green, red, or yellow
 
 | Phase | Scope | Done when |
 | --- | --- | --- |
-| 1 | Mode manager, KachiButton phrase detection through the signboard (`Go Go!`, `Hi!`, `Thx`, `Stop`; since 2026-09-25 also `STOP`, `OFF`, `MODE`), Manual Mode with leader arm and slow engagement, mode text on the signboard. Auto Catch, Auto Release, and FSC show "not available yet" and do not move the robot | Owner drives and puppets, alone and with a second person; the four phrases change the display and `Stop` zeroes the base |
+| 1 | Mode manager, KachiButton phrase detection through the signboard (`Go Go!`, `Hi!`, `Thx`, `STOP`; since 2026-09-25 also `OFF`, `MODE`), Manual Mode with leader arm and slow engagement, mode text on the signboard. Auto Catch, Auto Release, and FSC show "not available yet" and do not move the robot | Owner drives and puppets, alone and with a second person; the four phrases change the display and `Stop` zeroes the base |
 | 2 | Front-camera egg and basket detectors with venue calibration; Auto Catch precondition and base alignment; Auto Release precondition, home pose, and recorded release motion | Alignment ends with the egg at the target image position; release delivers a held egg into the basket |
 | 3 | Catch pose and wrist-view check in the Auto Catch flow; episode recording from the catch pose; ACT training in the fork; policy runner for the trained `pick_egg` checkpoint (wrist camera), success check, one automatic retry | Auto Catch succeeds from a `Hi!` press |
 | 4 | FSC: overhead camera, Gemini ER 2 target selection with rectangle confirmation, voice in and out, drive to the egg, return by pink beacon | End-to-end run from a spoken request to a released egg; duration measured |

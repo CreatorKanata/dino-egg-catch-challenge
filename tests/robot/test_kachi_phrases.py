@@ -2,7 +2,7 @@
 
 The KachiButton types plain ASCII phrases into the focused signboard window; kachi_phrases.feed
 turns typed chunks into commands. These tests cover chunking, the 1 s gap rule, back-to-back
-phrases, exact matching (both spellings of the stop unit's STOP / OFF / MODE keys), and the
+phrases, exact matching (the stop unit's all-capital STOP / OFF / MODE keys), and the
 buffer cap without pygame or a keyboard.
 """
 
@@ -28,8 +28,8 @@ class FeedTests(unittest.TestCase):
         self.assertEqual(buffer.text, "")
 
     def test_all_phrases_map_to_commands(self):
-        cases = {"Go Go!": "mode_toggle", "Hi!": "hi", "Thx": "thx", "Stop": "stop", "STOP": "stop",
-                 "OFF": "torque_off", "Off": "torque_off", "MODE": "mode_manual", "Mode": "mode_manual"}
+        cases = {"Go Go!": "mode_toggle", "Hi!": "hi", "Thx": "thx", "STOP": "stop",
+                 "OFF": "torque_off", "MODE": "mode_manual"}
         for phrase, command in cases.items():
             with self.subTest(phrase=phrase):
                 self.assertEqual(feed(PhraseBuffer(), phrase, 5.0)[1], (command,))
@@ -44,18 +44,18 @@ class FeedTests(unittest.TestCase):
         self.assertEqual(buffer.text, "op")
 
     def test_gap_at_limit_keeps_partial(self):
-        self.assertEqual(feed_all([("St", 0.0), ("op", 1.0)])[1], ("stop",))
+        self.assertEqual(feed_all([("ST", 0.0), ("OP", 1.0)])[1], ("stop",))
 
     def test_two_phrases_back_to_back(self):
         self.assertEqual(feed(PhraseBuffer(), "Hi!Hi!", 0.0)[1], ("hi", "hi"))
-        self.assertEqual(feed_all([("Hi!", 0.0), ("Stop", 0.1)])[1], ("hi", "stop"))
+        self.assertEqual(feed_all([("Hi!", 0.0), ("STOP", 0.1)])[1], ("hi", "stop"))
 
     def test_phrase_followed_by_more_text_in_one_chunk(self):
         buffer, commands = feed(PhraseBuffer(), "Thx.St", 0.0)
         self.assertEqual((commands, buffer.text), (("thx",), ".St"))
 
     def test_leading_noise_before_phrase_still_matches(self):
-        self.assertEqual(feed(PhraseBuffer(), "xxStop", 0.0)[1], ("stop",))
+        self.assertEqual(feed(PhraseBuffer(), "xxSTOP", 0.0)[1], ("stop",))
 
     def test_unknown_text_never_matches(self):
         buffer, commands = feed_all([("hello world", 0.0), ("Hi", 0.1), ("Th", 0.2)])

@@ -136,7 +136,7 @@ class SignboardViewTests(unittest.TestCase):
         from robot.signboard_process import serve
 
         pygame.event.clear()
-        pygame.event.post(pygame.event.Event(pygame.TEXTINPUT, text="Stop"))
+        pygame.event.post(pygame.event.Event(pygame.TEXTINPUT, text="STOP"))
         pygame.event.post(pygame.event.Event(pygame.TEXTINPUT, text="Hi!"))
         pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_c))
         pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_r))

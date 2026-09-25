@@ -1,9 +1,8 @@
 """src/robot/kachi_phrases.py: Turn KachiButton keystrokes into mode-manager commands.
 
 The KachiButtons type plain ASCII phrases into whichever window has keyboard focus: the attendee
-unit "Go Go!", "Hi!", "Thx"; the stop unit "STOP" / "Stop" (stop), "OFF" / "Off" (arm torque off),
-and "MODE" / "Mode" (back to Manual Mode), both spellings because its typed text is unconfirmed
-(config.KACHI_PHRASES); the signboard window keeps focus for the whole exhibit (owner decision in
+unit "Go Go!", "Hi!", "Thx"; the stop unit "STOP" (stop), "OFF" (arm torque off), and "MODE" (back
+to Manual Mode), all capitals as the owner configured it (config.KACHI_PHRASES); the signboard window keeps focus for the whole exhibit (owner decision in
 docs/spec/operating-modes.md). This pure, stdlib-only module matches typed chunks against complete
 phrases. The caller passes the time, so there are no timers and the rules are unit-tested.
 """

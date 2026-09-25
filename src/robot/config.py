@@ -188,9 +188,9 @@ SIGNBOARD_CHILD_EXIT_TIMEOUT_S: Final = 2.0  # parent waits this long for the ch
 
 # --- KachiButton phrases (typed into the focused signboard window; docs/spec/operating-modes.md) --
 # (typed phrase, command). Matching is exact and case-sensitive, including spaces and "!". Stop unit
-# (second KachiButton, typed text unconfirmed: both spellings): STOP, OFF (arm torque off), MODE (to Manual).
-KACHI_PHRASES: Final = (("Go Go!", "mode_toggle"), ("Hi!", "hi"), ("Thx", "thx"), ("Stop", "stop"), ("STOP", "stop"),
-                        ("OFF", "torque_off"), ("Off", "torque_off"), ("MODE", "mode_manual"), ("Mode", "mode_manual"))
+# (second KachiButton, all capitals, owner-confirmed 2026-09-26): STOP, OFF (arm torque off), MODE (to Manual).
+KACHI_PHRASES: Final = (("Go Go!", "mode_toggle"), ("Hi!", "hi"), ("Thx", "thx"), ("STOP", "stop"),
+                        ("OFF", "torque_off"), ("MODE", "mode_manual"))
 KACHI_PHRASE_GAP_S: Final = 1.0  # characters further apart than this never form one phrase
 KACHI_BUFFER_MAX: Final = 32  # trailing characters kept while waiting for a phrase to complete
 NOTICE_SECONDS: Final = 3.0  # how long a signboard notice ("STOP", "not available yet") stays
