@@ -76,7 +76,7 @@ If the path is not under `~/lerobot-dino-egg-catch-challenge`, run `pip install 
 
   The leader arm class is named `so_leader` internally, so the `so100_leader` and `so101_leader` config types both read from the `so_leader/` directory.
 
-- Keep the Pi address, serial ports, and camera indices in `src/robot/config.py` as required by `AGENTS.md`. Current values from the working session: Pi at `10.102.6.48`, leader arm at `/dev/tty.usbmodem5A7A0179021`.
+- Keep the Pi address, serial ports, and camera indices in `src/robot/config.py` as required by `AGENTS.md`. Current values from the working session: Pi at `192.168.2.9`, leader arm at `/dev/tty.usbmodem5A7A0179021`.
 
 ## 4. LeRobot API surface used by the application
 

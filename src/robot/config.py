@@ -19,7 +19,7 @@ class SpeedLevel:
 
 
 # --- LeKiwi host on the Raspberry Pi (verified 2026-09-24) ---------------------------------
-PI_REMOTE_IP: Final = "10.102.6.48"
+PI_REMOTE_IP: Final = "192.168.2.9"  # dedicated robot network since 2026-09-25 (was 10.102.6.48 on the phone hotspot)
 ROBOT_ID: Final = "dino_kiwi"
 ZMQ_CMD_PORT: Final = 5555  # LeKiwiClientConfig.port_zmq_cmd
 ZMQ_OBSERVATION_PORT: Final = 5556  # LeKiwiClientConfig.port_zmq_observations
