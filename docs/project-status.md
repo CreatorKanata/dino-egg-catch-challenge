@@ -12,7 +12,7 @@ Every statement about robot behavior below was owner-tested on 2026-09-24/25 unl
 | Area | State | Notes |
 | --- | --- | --- |
 | Manual Mode | Works on the robot | Base by dino-controller (joystick translation, encoder rotation 9° per click), arm by leader arm with slow engagement; one or two players |
-| KachiButton controls | Works | `Go Go!` Manual/FSC toggle, `Hi!` Auto Catch, `Thx` Auto Release, `Stop` latch on a second unit; signboard window must keep focus. Stop unit `OFF` (arm torque off) and `MODE` (the only resume): unit-tested only, needs the pulled Pi host |
+| KachiButton controls | Works | `Go Go!` Manual/FSC toggle, `Hi!` Auto Catch, `Thx` Auto Release, `Stop` latch on a second unit; signboard window must keep focus. Stop unit `OFF` (arm torque off) and `MODE` (the only resume) owner-tested 2026-09-26; needs the pulled Pi host |
 | Signboard | Works | pygame in its own interpreter, 16:9 overhead + front/wrist, egg/basket outlines, notices; `c` capture, `b`/`k`/`r` staff keys |
 | Egg detection | Works: green, red, yellow | Spot-anchored, edge fence + hull cap, ~13-17 ms/frame; weak spots: shaded lower half shortens the box, flicker when a same-colored object stands right behind the egg |
 | Auto Catch alignment | Works | Base aligns on ellipse width (target 0.607) and center x; egg kept on the signboard guide |
