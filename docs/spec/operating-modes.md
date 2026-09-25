@@ -74,7 +74,7 @@ The pick policy is trained in the LeRobot fork (ACT first, SmolVLA as a comparis
 3. The arm moves to the home/base pose (neck folded) while keeping the gripper angle unchanged so the egg stays held.
 4. A recorded release motion (a fixed joint trajectory, not a learned policy) delivers the egg into the basket and opens the mouth, then returns to home.
 
-Egg colors (owner decision, 2026-09-24): white eggs with **green, red, or orange** spots. Blue spots were dropped that day because on the robot they measured the same hue, saturation, and value as the blue tarp; orange is added by painting. The detector is local (no network call), anchored on the spots found as edge ellipses surrounded by white egg body, classified by spot color, with the pink basket excluded by color. Thresholds are calibrated from captures on the robot and stored in the vision config.
+Egg colors (owner decision, 2026-09-24): white eggs with **green, red, or yellow** spots. Blue spots were dropped that day because on the robot they measured the same hue, saturation, and value as the blue tarp; the yellow egg is painted (its glossy spots read orange-ish, hue 5-18, on the front camera; verified 2026-09-25). The detector is local (no network call), anchored on the spots found as edge ellipses surrounded by white egg body, classified by spot color, with the pink basket excluded by color. Thresholds are calibrated from captures on the robot and stored in the vision config.
 
 ## 5. FSC details that follow from the above
 
